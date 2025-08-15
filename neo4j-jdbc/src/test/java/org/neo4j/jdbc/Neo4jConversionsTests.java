@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -30,7 +30,9 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
+import java.util.Map;
 import java.util.TimeZone;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -85,7 +87,8 @@ class Neo4jConversionsTests {
 
 		if (expexctedExceptionType != null) {
 			assertThatExceptionOfType(expexctedExceptionType).isThrownBy(() -> Neo4jConversions.asTime(value))
-				.withMessage("DATE value cannot be mapped to java.sql.Time");
+				.withMessageMatching(Pattern.quote("data exception - Cannot coerce DATE '") + ".+"
+						+ Pattern.quote("' (DATE) to java.sql.Time"));
 		}
 		else {
 			var time = Neo4jConversions.asTime(value);
@@ -120,7 +123,8 @@ class Neo4jConversionsTests {
 
 		if (expectedExceptionType != null) {
 			assertThatExceptionOfType(expectedExceptionType).isThrownBy(() -> Neo4jConversions.asTime(value, cal))
-				.withMessage("DATE value cannot be mapped to java.sql.Time");
+				.withMessageMatching(Pattern.quote("data exception - Cannot coerce DATE '") + ".+"
+						+ Pattern.quote("' (DATE) to java.sql.Time"));
 		}
 		else {
 			var time = Neo4jConversions.asTime(value, cal);
@@ -157,7 +161,8 @@ class Neo4jConversionsTests {
 
 		if (expexctedExceptionType != null) {
 			assertThatExceptionOfType(expexctedExceptionType).isThrownBy(() -> Neo4jConversions.asDate(value))
-				.withMessage("LOCAL_TIME value cannot be mapped to java.sql.Date");
+				.withMessageMatching(Pattern.quote("data exception - Cannot coerce TIME ") + ".+"
+						+ Pattern.quote(" (LOCAL_TIME) to java.sql.Date"));
 		}
 		else {
 			var date = Neo4jConversions.asDate(value);
@@ -188,7 +193,8 @@ class Neo4jConversionsTests {
 
 		if (expectedExceptionType != null) {
 			assertThatExceptionOfType(expectedExceptionType).isThrownBy(() -> Neo4jConversions.asDate(value, cal))
-				.withMessage("LOCAL_TIME value cannot be mapped to java.sql.Date");
+				.withMessageMatching(Pattern.quote("data exception - Cannot coerce TIME '") + ".+"
+						+ Pattern.quote("' (LOCAL_TIME) to java.sql.Date"));
 		}
 		else {
 			var date = Neo4jConversions.asDate(value, cal);
@@ -225,7 +231,8 @@ class Neo4jConversionsTests {
 
 		if (expexctedExceptionType != null) {
 			assertThatExceptionOfType(expexctedExceptionType).isThrownBy(() -> Neo4jConversions.asTimestamp(value))
-				.withMessage("DATE value cannot be mapped to java.sql.Timestamp");
+				.withMessageMatching(Pattern.quote("data exception - Cannot coerce DATE '") + ".+"
+						+ Pattern.quote("' (DATE) to java.sql.Timestamp"));
 		}
 		else {
 			var time = Neo4jConversions.asTimestamp(value);
@@ -256,7 +263,8 @@ class Neo4jConversionsTests {
 
 		if (expectedExceptionType != null) {
 			assertThatExceptionOfType(expectedExceptionType).isThrownBy(() -> Neo4jConversions.asTimestamp(value, cal))
-				.withMessage("DATE value cannot be mapped to java.sql.Timestamp");
+				.withMessageMatching(Pattern.quote("data exception - Cannot coerce DATE '") + ".+"
+						+ Pattern.quote("' (DATE) to java.sql.Timestamp"));
 		}
 		else {
 			var time = Neo4jConversions.asTimestamp(value, cal);
@@ -289,6 +297,29 @@ class Neo4jConversionsTests {
 	void shouldNotFailOnSuddenNewNeo4jTypesThatDontMapToModernOnes() {
 		assertThat(Neo4jConversions.oldCypherTypesToNew("whatever")).isEqualTo("OTHER");
 		assertThat(Neo4jConversions.oldCypherTypesToNew("Null")).isEqualTo("NULL");
+	}
+
+	static Stream<Arguments> assertTypeMapShouldWork() {
+		return Stream.of(null, Map.of()).map(Arguments::of);
+	}
+
+	@ParameterizedTest
+	@MethodSource
+	void assertTypeMapShouldWork(Map<String, Class<?>> map) {
+		assertThatNoException().isThrownBy(() -> Neo4jConversions.assertTypeMap(map));
+	}
+
+	static Stream<Arguments> assertTypeNonEmptyMapShouldWork() {
+		return Stream.of(Map.of("BIGINT", String.class, "VARCHAR", Integer.class)).map(Arguments::of);
+	}
+
+	@ParameterizedTest
+	@MethodSource
+	void assertTypeNonEmptyMapShouldWork(Map<String, Class<?>> map) {
+		assertThatExceptionOfType(SQLException.class).isThrownBy(() -> Neo4jConversions.assertTypeMap(map))
+			.matches(ex -> ex.getErrorCode() == 0 && "22N11".equals(ex.getSQLState()))
+			.withMessage(
+					"data exception - Invalid argument, cannot process non-empty type map BIGINT = class java.lang.String, VARCHAR = class java.lang.Integer");
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,13 +19,16 @@
 package org.neo4j.jdbc.it.cp;
 
 import java.sql.Connection;
+import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Properties;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.params.provider.Arguments;
 import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -33,25 +36,63 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class IntegrationTestBase {
 
+	protected final Stream<Arguments> allProtocols() {
+		var result = Stream.<Arguments>builder();
+		result.add(Arguments.of("neo4j"));
+		var neo4jImage = System.getProperty("neo4j-jdbc.default-neo4j-image");
+		if (neo4jImage == null || neo4jImage.startsWith("neo4j:20")) {
+			result.add(Arguments.of("http"));
+		}
+		return result.build();
+	}
+
 	IntegrationTestBase() {
 		this.neo4j = TestUtils.getNeo4jContainer();
 	}
 
 	IntegrationTestBase(String neo4jContainerName) {
-		this.neo4j = TestUtils.getNeo4jContainer(neo4jContainerName);
+		this(neo4jContainerName, false, false);
+	}
+
+	IntegrationTestBase(String neo4jContainerName, boolean enableApoc, boolean forceEnterprise) {
+		this.neo4j = TestUtils.getNeo4jContainer(neo4jContainerName, enableApoc, forceEnterprise);
 	}
 
 	@SuppressWarnings("resource") // On purpose to reuse this
 	protected final Neo4jContainer<?> neo4j;
 
+	protected boolean doClean = true;
+
+	protected Driver driver;
+
 	@BeforeAll
-	void startNeo4j() {
+	void startNeo4j() throws SQLException {
 		this.neo4j.start();
+
+		var url = getConnectionURL();
+		this.driver = DriverManager.getDriver(url);
+		var properties = new Properties();
+		properties.put("user", "neo4j");
+		properties.put("password", this.neo4j.getAdminPassword());
+		properties.put("database", "system");
+		try (var connection = this.driver.connect(url, properties); var stmt = connection.createStatement()) {
+			var resultSet = stmt.executeQuery("CALL dbms.components() YIELD edition");
+			resultSet.next();
+			var edition = resultSet.getString("edition");
+			resultSet.close();
+			if ("enterprise".equalsIgnoreCase(edition)) {
+				stmt.execute("CREATE DATABASE rodb IF NOT EXISTS WAIT");
+				stmt.execute("ALTER DATABASE rodb SET ACCESS READ ONLY");
+			}
+		}
 	}
 
 	@BeforeEach
 	void clearDatabase() throws SQLException {
-		try (var stmt = this.getConnection().createStatement()) {
+		if (!this.doClean) {
+			return;
+		}
+		try (var connection = this.getConnection(); var stmt = connection.createStatement()) {
 			stmt.execute("""
 					MATCH (n)
 					CALL {
@@ -65,9 +106,9 @@ abstract class IntegrationTestBase {
 		return getConnection(false, false);
 	}
 
-	final Connection getConnection(boolean translate, boolean rewriteBatchedStatements) throws SQLException {
-		var url = "jdbc:neo4j://%s:%d".formatted(this.neo4j.getHost(), this.neo4j.getMappedPort(7687));
-		var driver = DriverManager.getDriver(url);
+	final Connection getConnection(boolean translate, boolean rewriteBatchedStatements, String... additionalProperties)
+			throws SQLException {
+		var url = getConnectionURL();
 		var properties = new Properties();
 		properties.put("user", "neo4j");
 		properties.put("password", this.neo4j.getAdminPassword());
@@ -77,7 +118,17 @@ abstract class IntegrationTestBase {
 			properties.put("s2c.alwaysEscapeNames", "false");
 			properties.put("s2c.prettyPrint", "false");
 		}
-		return driver.connect(url, properties);
+
+		if (additionalProperties.length > 0 && additionalProperties.length % 2 == 0) {
+			for (int i = 0; i < additionalProperties.length; i += 2) {
+				properties.put(additionalProperties[0], additionalProperties[1]);
+			}
+		}
+		return this.driver.connect(url, properties);
+	}
+
+	String getConnectionURL() {
+		return "jdbc:neo4j://%s:%d".formatted(this.neo4j.getHost(), this.neo4j.getMappedPort(7687));
 	}
 
 }

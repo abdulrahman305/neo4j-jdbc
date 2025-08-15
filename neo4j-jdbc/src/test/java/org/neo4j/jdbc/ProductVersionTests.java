@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -25,7 +25,7 @@ class ProductVersionTests {
 
 	@Test
 	void getValueShouldWork() {
-		Assertions.assertThat(ProductVersion.getValue()).isEqualTo("unknown");
+		Assertions.assertThat(ProductVersion.getValue()).isEqualTo("dev");
 	}
 
 	@Test
@@ -33,7 +33,7 @@ class ProductVersionTests {
 
 		Assertions.assertThatIllegalArgumentException()
 			.isThrownBy(ProductVersion::getMajorVersion)
-			.withMessage("Unsupported or unknown version 'unknown'");
+			.withMessage("Unsupported or unknown version 'dev'");
 	}
 
 	@Test
@@ -41,7 +41,7 @@ class ProductVersionTests {
 
 		Assertions.assertThatIllegalArgumentException()
 			.isThrownBy(ProductVersion::getMinorVersion)
-			.withMessage("Unsupported or unknown version 'unknown'");
+			.withMessage("Unsupported or unknown version 'dev'");
 	}
 
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,7 +25,7 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-it</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 	</parent>
 	<artifactId>neo4j-jdbc-it-stub</artifactId>
 
@@ -37,6 +37,11 @@
 	</properties>
 
 	<dependencies>
+		<dependency>
+			<groupId>com.github.stefanbirkner</groupId>
+			<artifactId>system-lambda</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.junit.platform</groupId>
 			<artifactId>junit-platform-launcher</artifactId>
@@ -70,40 +75,5 @@
 			<scope>test</scope>
 		</dependency>
 	</dependencies>
-
-	<profiles>
-		<profile>
-			<id>native-image</id>
-			<activation>
-				<property>
-					<name>native</name>
-				</property>
-			</activation>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>org.graalvm.buildtools</groupId>
-						<artifactId>native-maven-plugin</artifactId>
-						<version>${native-maven-plugin.version}</version>
-						<extensions>true</extensions>
-						<configuration>
-							<metadataRepository>
-								<enabled>true</enabled>
-							</metadataRepository>
-						</configuration>
-						<executions>
-							<execution>
-								<id>test-native</id>
-								<goals>
-									<goal>test</goal>
-								</goals>
-								<phase>verify</phase>
-							</execution>
-						</executions>
-					</plugin>
-				</plugins>
-			</build>
-		</profile>
-	</profiles>
 
 </project>

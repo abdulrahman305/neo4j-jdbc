@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,6 +19,7 @@
 package org.neo4j.jdbc.it.cp;
 
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.util.List;
 import java.util.Map;
@@ -44,7 +45,7 @@ class StatementIT extends IntegrationTestBase {
 	void shouldAllowSubsequentQueriesAfterTransactionErrorInAutoCommit() throws SQLException {
 		try (var connection = getConnection(); var statement = connection.createStatement()) {
 			assertThatThrownBy(() -> statement.executeQuery("UNWIND [1, 1, 1, 1, 0] AS x RETURN 1/x"))
-				.isExactlyInstanceOf(SQLException.class);
+				.isInstanceOf(SQLException.class);
 			var resultSet = statement.executeQuery("RETURN 1");
 			assertThat(resultSet.next()).isTrue();
 			assertThat(resultSet.getInt(1)).isEqualTo(1);
@@ -56,8 +57,8 @@ class StatementIT extends IntegrationTestBase {
 		try (var connection = getConnection(); var statement = connection.createStatement()) {
 			connection.setAutoCommit(false);
 			assertThatThrownBy(() -> statement.executeQuery("UNWIND [1, 1, 1, 1, 0] AS x RETURN 1/x"))
-				.isExactlyInstanceOf(SQLException.class);
-			assertThatThrownBy(() -> statement.executeQuery("RETURN 1")).isExactlyInstanceOf(SQLException.class);
+				.isInstanceOf(SQLException.class);
+			assertThatThrownBy(() -> statement.executeQuery("RETURN 1")).isInstanceOf(SQLException.class);
 			connection.rollback();
 			var resultSet = statement.executeQuery("RETURN 1");
 			assertThat(resultSet.next()).isTrue();
@@ -72,9 +73,9 @@ class StatementIT extends IntegrationTestBase {
 				var statement2 = connection.createStatement()) {
 			statement1.setFetchSize(5);
 			statement2.setFetchSize(5);
-			var resultSet1 = statement1.executeQuery("UNWIND range(1, 10000) AS x RETURN x");
+			statement1.executeQuery("UNWIND range(1, 10000) AS x RETURN x");
 			assertThatThrownBy(() -> statement2.executeQuery("UNWIND range(1, 10000) AS x RETURN x"))
-				.isExactlyInstanceOf(SQLException.class);
+				.isExactlyInstanceOf(SQLFeatureNotSupportedException.class);
 		}
 	}
 
@@ -99,8 +100,7 @@ class StatementIT extends IntegrationTestBase {
 		try (var connection = getConnection()) {
 			connection.setAutoCommit(false);
 			try (var statement = connection.createStatement()) {
-				var resultSet = statement
-					.executeQuery(String.format("UNWIND range(1, 5) AS x CREATE (n:Test {testId: '%s'})", testId));
+				statement.executeQuery(String.format("UNWIND range(1, 5) AS x CREATE (n:Test {testId: '%s'})", testId));
 			}
 
 			if (commit) {
@@ -299,7 +299,7 @@ class StatementIT extends IntegrationTestBase {
 
 			assertThat(rs.next()).isFalse();
 			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getInt("i"))
-				.withMessage("Invalid cursor position");
+				.withMessage("general processing exception - Invalid cursor position");
 			assertThat(rs.isFirst()).isFalse();
 			assertThat(rs.isLast()).isFalse();
 			assertThat(rs.isAfterLast()).isTrue();
@@ -332,7 +332,7 @@ class StatementIT extends IntegrationTestBase {
 
 			assertThat(rs.next()).isFalse();
 			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getInt("i"))
-				.withMessage("Invalid cursor position");
+				.withMessage("general processing exception - Invalid cursor position");
 			assertThat(rs.isAfterLast()).isTrue();
 		}
 	}
@@ -403,34 +403,21 @@ class StatementIT extends IntegrationTestBase {
 		// integer.
 		try (var connection = getConnection();
 				var stmt = connection.createStatement();
-				var rs = stmt.executeQuery("RETURN 1 AS i, 2147483648 AS l")) {
+				var rs = stmt.executeQuery("RETURN 1 AS i, 2147483647 AS ml, 2147483648 AS l")) {
 			assertThat(rs.next()).isTrue();
 			var meta = rs.getMetaData();
 			assertThat(meta.getColumnType(1)).isEqualTo(Types.INTEGER);
-			assertThat(meta.getPrecision(1)).isEqualTo(String.valueOf(Long.MAX_VALUE).length());
+			assertThat(meta.getPrecision(1)).isEqualTo(String.valueOf(Integer.MAX_VALUE).length());
 			assertThat(meta.getColumnType(2)).isEqualTo(Types.INTEGER);
-			assertThat(meta.getPrecision(2)).isEqualTo(String.valueOf(Long.MAX_VALUE).length());
+			assertThat(meta.getPrecision(2)).isEqualTo(String.valueOf(Integer.MAX_VALUE).length());
+			assertThat(meta.getColumnType(3)).isEqualTo(Types.BIGINT);
+			assertThat(meta.getPrecision(3)).isEqualTo(String.valueOf(Long.MAX_VALUE).length());
 			var o = rs.getObject(1);
 			assertThat(o).isInstanceOf(Long.class).isEqualTo(1L);
 			o = rs.getObject(2);
+			assertThat(o).isInstanceOf(Long.class).isEqualTo(2147483647L);
+			o = rs.getObject(3);
 			assertThat(o).isInstanceOf(Long.class).isEqualTo(2147483648L);
-		}
-	}
-
-	// GH-401
-	@Test
-	void noSurpriseGetString() throws SQLException {
-		try (var connection = getConnection();
-				var stmt = connection.createStatement();
-				var result = stmt.executeQuery("RETURN {a: '1', b: '2'} AS m, [1,2,3] AS l")) {
-
-			assertThat(result.next()).isTrue();
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> result.getString("m"))
-				.withMessage("MAP value can not be mapped to String");
-			assertThat(result.getObject("m")).isInstanceOf(Map.class);
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> result.getString("l"))
-				.withMessage("LIST OF ANY? value can not be mapped to String");
-			assertThat(result.getObject("l")).isInstanceOf(List.class);
 		}
 	}
 

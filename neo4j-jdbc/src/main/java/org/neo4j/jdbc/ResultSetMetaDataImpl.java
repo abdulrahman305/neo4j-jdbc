@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -20,10 +20,11 @@ package org.neo4j.jdbc;
 
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.util.List;
+import java.util.Objects;
 
+import org.neo4j.jdbc.Neo4jException.GQLError;
 import org.neo4j.jdbc.values.BooleanValue;
 import org.neo4j.jdbc.values.BytesValue;
 import org.neo4j.jdbc.values.DateTimeValue;
@@ -34,6 +35,7 @@ import org.neo4j.jdbc.values.IntegerValue;
 import org.neo4j.jdbc.values.ListValue;
 import org.neo4j.jdbc.values.LocalDateTimeValue;
 import org.neo4j.jdbc.values.LocalTimeValue;
+import org.neo4j.jdbc.values.LossyCoercion;
 import org.neo4j.jdbc.values.MapValue;
 import org.neo4j.jdbc.values.NodeValue;
 import org.neo4j.jdbc.values.NullValue;
@@ -46,13 +48,26 @@ import org.neo4j.jdbc.values.TimeValue;
 import org.neo4j.jdbc.values.Type;
 import org.neo4j.jdbc.values.Value;
 
+import static org.neo4j.jdbc.Neo4jException.withReason;
+
 final class ResultSetMetaDataImpl implements ResultSetMetaData {
+
+	private final String schemaName;
+
+	private final String catalogName;
+
+	private final String tableName;
 
 	private final List<String> keys;
 
 	private final Record firstRecord;
 
-	ResultSetMetaDataImpl(List<String> keys, Record firstRecord) {
+	ResultSetMetaDataImpl(String schemaName, String catalogName, List<String> keys, Record firstRecord) {
+		// JDBC spec defines the empty string as "not applicable"
+		this.schemaName = Objects.requireNonNullElse(schemaName, "").trim();
+		this.catalogName = Objects.requireNonNullElse(catalogName, "").trim();
+		// right now we have no way of tracking where a specific column comes from.
+		this.tableName = "";
 		this.keys = keys;
 		this.firstRecord = firstRecord;
 	}
@@ -78,8 +93,8 @@ final class ResultSetMetaDataImpl implements ResultSetMetaData {
 	}
 
 	@Override
-	public boolean isCurrency(int column) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+	public boolean isCurrency(int column) {
+		return false;
 	}
 
 	@Override
@@ -112,12 +127,12 @@ final class ResultSetMetaDataImpl implements ResultSetMetaData {
 
 	@Override
 	public String getSchemaName(int column) {
-		return "public"; // every schema is public.
+		return this.schemaName;
 	}
 
 	@Override
 	public int getPrecision(int column) throws SQLException {
-		return DatabaseMetadataImpl.getMaxPrecision(this.getColumnType(column));
+		return DatabaseMetadataImpl.getMaxPrecision(this.getColumnType(column)).asInt(0);
 	}
 
 	@Override
@@ -127,21 +142,32 @@ final class ResultSetMetaDataImpl implements ResultSetMetaData {
 
 	@Override
 	public String getTableName(int column) {
-		return "Unknown?"; // can we get this? or does it need another query?
+		return this.tableName;
 	}
 
 	@Override
 	public String getCatalogName(int column) {
-		return ""; // No Catalog ever for neo4j.
+		return this.catalogName;
 	}
 
 	@Override
-	public int getColumnType(int column) throws SQLException {
+	public int getColumnType(int column) {
 		if (this.firstRecord == null) {
 			return Types.NULL;
 		}
 		int adjustedIndex = column - 1;
-		var recordType = this.firstRecord.get(adjustedIndex).type();
+		var value = this.firstRecord.get(adjustedIndex);
+		var recordType = value.type();
+		if (recordType == Type.INTEGER) {
+			// See if it could fit into an INTEGER
+			try {
+				value.asInt();
+				return Types.INTEGER;
+			}
+			catch (LossyCoercion ex) {
+				// Nope, not the case
+			}
+		}
 		return Neo4jConversions.toSqlType(recordType);
 	}
 
@@ -242,7 +268,7 @@ final class ResultSetMetaDataImpl implements ResultSetMetaData {
 			}
 		}
 
-		throw new SQLException("Unknown type");
+		throw new Neo4jException(GQLError.$22G03.withTemplatedMessage());
 	}
 
 	@Override
@@ -251,7 +277,7 @@ final class ResultSetMetaDataImpl implements ResultSetMetaData {
 			return iface.cast(this);
 		}
 		else {
-			throw new SQLException("This object does not implement the given interface");
+			throw new Neo4jException(withReason("This object does not implement the given interface"));
 		}
 	}
 

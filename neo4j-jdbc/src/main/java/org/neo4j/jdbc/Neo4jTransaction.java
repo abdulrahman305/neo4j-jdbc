@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,11 +19,12 @@
 package org.neo4j.jdbc;
 
 import java.sql.SQLException;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
-import org.neo4j.jdbc.internal.bolt.response.DiscardResponse;
-import org.neo4j.jdbc.internal.bolt.response.PullResponse;
-import org.neo4j.jdbc.internal.bolt.response.RunResponse;
+import org.neo4j.bolt.connection.SummaryCounters;
+import org.neo4j.jdbc.values.Record;
 
 /**
  * A transaction that manages a Bolt transaction on the network level.
@@ -98,6 +99,33 @@ interface Neo4jTransaction {
 		 * A successfully rolled back transaction.
 		 */
 		ROLLEDBACK
+
+	}
+
+	record ResultSummary(SummaryCounters counters) {
+	}
+
+	interface RunResponse {
+
+		long queryId();
+
+		List<String> keys();
+
+	}
+
+	interface PullResponse {
+
+		List<Record> records();
+
+		Optional<ResultSummary> resultSummary();
+
+		boolean hasMore();
+
+	}
+
+	interface DiscardResponse {
+
+		Optional<ResultSummary> resultSummary();
 
 	}
 

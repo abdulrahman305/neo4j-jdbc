@@ -50,23 +50,26 @@ jobs:
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
-      - name: 'Clean and verify'
+      - name: 'Preflight unit tests only'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./mvnw --no-transfer-progress -DskipITs -am -pl neo4j-jdbc clean package
+
+      - name: 'Verify and install'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         run: >
-          ./mvnw --no-transfer-progress
-          -P$USE_SONAR -Dsonar.projectKey=neo4j-jdbc -Dsonar.projectName='neo4j-jdbc'
-          -am -pl neo4j-jdbc -pl neo4j-jdbc-bom -pl bundles/neo4j-jdbc-bundle -pl bundles/neo4j-jdbc-full-bundle          
-          clean install
+          ./mvnw --no-transfer-progress -DskipClusterIT -P$USE_SONAR -Dsonar.projectKey=neo4j-jdbc -Dsonar.projectName='neo4j-jdbc' install
 
   integration_tests:
-    name: Integration tests using Java ${{ matrix.java }}
+    name: Integration tests using Java ${{ matrix.java }} against ${{ matrix.neo4j }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        java: [ '17', '21' ]
+        java: [ '21', '24' ]
+        neo4j: [ '5.26.8' ]
     needs: build
     steps:
       - name: 'Set up JDK'
@@ -93,7 +96,8 @@ jobs:
       - name: 'Run integration tests'
         run: > 
            ./mvnw --no-transfer-progress 
-           -DskipUTs 
+           -DskipUTs
+           -Dneo4j.version=${{ matrix.neo4j }}
            -f neo4j-jdbc-it
            clean verify
 
@@ -103,7 +107,7 @@ jobs:
     needs: build
     steps:
       - name: 'Setup GraalVM'
-        uses: graalvm/setup-graalvm@v1
+        uses: graalvm/setup-graalvm@v1.3.3
         with:
           distribution: 'graalvm-community'
           java-version: '17'
@@ -121,8 +125,11 @@ jobs:
       - name: 'Checkout'
         uses: actions/checkout@v4
 
-      - name: 'Run native tests'
+      - name: 'Run native tests (default distribution)'
         run: ./mvnw --no-transfer-progress -DskipUTs -Dnative clean verify -pl neo4j-jdbc-it/neo4j-jdbc-it-cp
+
+      - name: 'Run native tests (bundled distribution)'
+        run: ./mvnw --no-transfer-progress -DskipUTs -Dnative clean verify -pl bundles/neo4j-jdbc-full-bundle
 
   security_test:
     runs-on: ubuntu-latest

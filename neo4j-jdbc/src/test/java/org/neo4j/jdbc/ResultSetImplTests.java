@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -27,6 +27,8 @@ import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.ResultSet;
@@ -67,8 +69,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.neo4j.jdbc.internal.bolt.response.PullResponse;
-import org.neo4j.jdbc.internal.bolt.response.RunResponse;
 import org.neo4j.jdbc.values.Record;
 import org.neo4j.jdbc.values.Type;
 import org.neo4j.jdbc.values.Value;
@@ -115,15 +115,68 @@ class ResultSetImplTests {
 								supplier -> assertThat(supplier.get()).isEqualTo("testing"))),
 				// null handling
 				Arguments.of(Values.NULL,
-						Named.<VerificationLogic<Boolean>>of("verify returns null",
+						Named.<VerificationLogic<String>>of("verify returns null",
 								supplier -> assertThat(supplier.get()).isNull())),
 				// other types handling
 				Arguments.of(Values.value(0),
-						Named.<VerificationLogic<Boolean>>of("verify throws exception",
-								supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))),
+						Named.<VerificationLogic<String>>of("verify throws exception",
+								supplier -> assertThat(supplier.get()).isEqualTo("0"))),
 				Arguments.of(Values.value(true),
-						Named.<VerificationLogic<Boolean>>of("verify throws exception",
-								supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))))
+						Named.<VerificationLogic<String>>of("verify throws exception",
+								supplier -> assertThat(supplier.get()).isEqualTo("TRUE"))))
+			// map each set of arguments to both index and label access methods
+			.flatMap(ResultSetImplTests::mapArgumentToBothIndexAndLabelAccess);
+	}
+
+	@ParameterizedTest
+	@MethodSource("getUrlArgs")
+	void shouldProcessValueOnGetUrl(Value value, VerificationLogic<URL> verificationLogic, boolean indexAccess)
+			throws SQLException {
+		// given
+		this.resultSet = setupWithValue(value, 0);
+		this.resultSet.next();
+
+		// when & then
+		verificationLogic.run(() -> indexAccess ? this.resultSet.getURL(INDEX) : this.resultSet.getURL(LABEL));
+	}
+
+	private static Stream<Arguments> getUrlArgs() {
+
+		URL url;
+		try {
+			url = new URL("https://neo4j.com");
+		}
+		catch (MalformedURLException ex) {
+			throw new RuntimeException(ex);
+		}
+		return Stream
+			.of(Arguments.of(Values.value("https://neo4j.com"),
+					Named.<VerificationLogic<URL>>of("verify returns valid URL",
+							supplier -> assertThat(supplier.get()).isEqualTo(url))),
+					// invalid url handling
+					Arguments.of(Values.value("0"),
+							Named.<VerificationLogic<URL>>of("verify throws exception",
+									supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class)
+										.hasCauseInstanceOf(MalformedURLException.class))),
+					Arguments.of(Values.value(""),
+							Named.<VerificationLogic<URL>>of("verify throws exception",
+									supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class)
+										.hasCauseInstanceOf(MalformedURLException.class))),
+					Arguments.of(Values.value("testing"),
+							Named.<VerificationLogic<URL>>of("verify throws exception",
+									supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class)
+										.hasCauseInstanceOf(MalformedURLException.class))),
+					// null handling
+					Arguments.of(Values.NULL,
+							Named.<VerificationLogic<Boolean>>of("verify returns null",
+									supplier -> assertThat(supplier.get()).isNull())),
+					// other types handling
+					Arguments.of(Values.value(0),
+							Named.<VerificationLogic<Boolean>>of("verify throws exception",
+									supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))),
+					Arguments.of(Values.value(true),
+							Named.<VerificationLogic<Boolean>>of("verify throws exception",
+									supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))))
 			// map each set of arguments to both index and label access methods
 			.flatMap(ResultSetImplTests::mapArgumentToBothIndexAndLabelAccess);
 	}
@@ -332,6 +385,12 @@ class ResultSetImplTests {
 				Arguments.of(Values.value(Integer.MIN_VALUE - 1L),
 						Named.<VerificationLogic<Integer>>of("verify throws exception",
 								supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))),
+				Arguments.of(Values.value("23"),
+						Named.<VerificationLogic<Integer>>of("verify string to int",
+								supplier -> assertThat(supplier.get()).isEqualTo(23))),
+				Arguments.of(Values.value("ff"),
+						Named.<VerificationLogic<Integer>>of("verify garbage string throws",
+								supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))),
 				// null handling
 				Arguments.of(Values.NULL,
 						Named.<VerificationLogic<Integer>>of("verify returns 0",
@@ -371,6 +430,12 @@ class ResultSetImplTests {
 				Arguments.of(Values.value(Long.MAX_VALUE),
 						Named.<VerificationLogic<Long>>of("verify returns Long.MAX_VALUE",
 								supplier -> assertThat(supplier.get()).isEqualTo(Long.MAX_VALUE))),
+				Arguments.of(Values.value("23"),
+						Named.<VerificationLogic<Long>>of("verify string to long",
+								supplier -> assertThat(supplier.get()).isEqualTo(23))),
+				Arguments.of(Values.value("ff"),
+						Named.<VerificationLogic<Long>>of("verify garbage string throws",
+								supplier -> assertThatThrownBy(supplier::get).isInstanceOf(SQLException.class))),
 				// null handling
 				Arguments.of(Values.NULL,
 						Named.<VerificationLogic<Long>>of("verify returns 0",
@@ -1396,92 +1461,92 @@ class ResultSetImplTests {
 
 	@Test
 	void statementShouldBeAvailable() throws SQLException {
-		try (var resultSet = emptyResultSet()) {
-			assertThat(resultSet.getStatement()).isNotNull();
+		try (var rs = emptyResultSet()) {
+			assertThat(rs.getStatement()).isNotNull();
 		}
 	}
 
 	@Test
 	void indexShouldBeChecked() throws SQLException {
-		try (var resultSet = setupWithValue(Values.value("test"), 0)) {
-			resultSet.next();
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> resultSet.getInt(-23))
-				.withMessage("Invalid column index value");
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> resultSet.getInt(42))
-				.withMessage("Invalid column index value");
+		try (var rs = setupWithValue(Values.value("test"), 0)) {
+			rs.next();
+			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getInt(-23))
+				.withMessage("general processing exception - Invalid column index value");
+			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getInt(42))
+				.withMessage("general processing exception - Invalid column index value");
 		}
 	}
 
 	@Test
 	void nameShouldBeChecked() throws SQLException {
-		try (var resultSet = setupWithValue(Values.value("test"), 0)) {
-			resultSet.next();
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> resultSet.getInt("42"))
-				.withMessage("Invalid column label value");
+		try (var rs = setupWithValue(Values.value("test"), 0)) {
+			rs.next();
+			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getInt("42"))
+				.withMessage("general processing exception - Invalid column label value");
 		}
 	}
 
 	@Test
 	void uncoercibleObject() throws SQLException {
-		try (var resultSet = setupWithValue(Values.value("test"), 0)) {
-			resultSet.next();
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> resultSet.getObject(1, Float.class))
-				.withMessage(
-						"org.neo4j.jdbc.values.UncoercibleException: Cannot coerce java.lang.String to java.lang.Float");
+		try (var rs = setupWithValue(Values.value("test"), 0)) {
+			rs.next();
+			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getObject(1, Float.class))
+				.withMessage("data exception - Cannot coerce \"test\" (STRING) to java.lang.Float");
 		}
 	}
 
 	@Test
 	void shouldThrowWhenClosed() throws SQLException {
-		var resultSet = emptyResultSet();
-		resultSet.close();
-		assertThatExceptionOfType(SQLException.class).isThrownBy(resultSet::next)
-			.withMessage("This result set is closed");
+		var rs = emptyResultSet();
+		rs.close();
+		assertThatExceptionOfType(SQLException.class).isThrownBy(rs::next)
+			.withMessage("general processing exception - This result set is closed");
 	}
 
 	@SuppressWarnings("deprecation")
 	@Test
 	void bigDecimalRounding() throws SQLException {
-		try (var resultSet = setupWithValue(Values.value(1.25), 0)) {
-			resultSet.next();
+		try (var rs = setupWithValue(Values.value(1.25), 0)) {
+			rs.next();
 
-			assertThat(resultSet.getBigDecimal(1, 2)).isEqualTo(new BigDecimal("1.25"));
-			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> resultSet.getBigDecimal(1, 1))
-				.withMessage("java.lang.ArithmeticException: Rounding necessary");
+			assertThat(rs.getBigDecimal(1, 2)).isEqualTo(new BigDecimal("1.25"));
+			assertThatExceptionOfType(SQLException.class).isThrownBy(() -> rs.getBigDecimal(1, 1))
+				.withMessage("data exception - Cannot coerce 1.25 (FLOAT) to java.math.BigDecimal")
+				.withStackTraceContaining("java.lang.ArithmeticException: Rounding necessary");
 		}
 	}
 
 	@SuppressWarnings("resource")
 	@TestFactory
 	Stream<DynamicNode> characteristicsShouldWork() {
-		var resultSet = emptyResultSet();
+		var emptyResultSet = emptyResultSet();
 		return Stream.of(
 				DynamicContainer
 					.dynamicContainer("fetchDirection",
 							Stream.of(
 									DynamicTest.dynamicTest("get",
-											() -> assertThat(resultSet.getFetchDirection())
+											() -> assertThat(emptyResultSet.getFetchDirection())
 												.isEqualTo(ResultSet.FETCH_FORWARD)),
 									DynamicTest.dynamicTest("set", () -> {
-										assertThatNoException()
-											.isThrownBy(() -> resultSet.setFetchDirection(ResultSet.FETCH_FORWARD));
+										assertThatNoException().isThrownBy(
+												() -> emptyResultSet.setFetchDirection(ResultSet.FETCH_FORWARD));
 										assertThatExceptionOfType(SQLException.class)
-											.isThrownBy(() -> resultSet.setFetchDirection(ResultSet.FETCH_REVERSE))
+											.isThrownBy(() -> emptyResultSet.setFetchDirection(ResultSet.FETCH_REVERSE))
 											.withMessage("Only forward fetching is supported");
 									}))),
 				DynamicTest.dynamicTest("fetchSize", () -> {
 					var changedValue = StatementImpl.DEFAULT_FETCH_SIZE - 1;
-					resultSet.setFetchSize(changedValue);
-					assertThat(resultSet.getFetchSize()).isEqualTo(changedValue);
-					resultSet.setFetchSize(-1);
-					assertThat(resultSet.getFetchSize()).isEqualTo(StatementImpl.DEFAULT_FETCH_SIZE);
+					emptyResultSet.setFetchSize(changedValue);
+					assertThat(emptyResultSet.getFetchSize()).isEqualTo(changedValue);
+					emptyResultSet.setFetchSize(-1);
+					assertThat(emptyResultSet.getFetchSize()).isEqualTo(StatementImpl.DEFAULT_FETCH_SIZE);
 				}),
 				DynamicTest.dynamicTest("type",
-						() -> assertThat(resultSet.getType()).isEqualTo(ResultSet.TYPE_FORWARD_ONLY)),
+						() -> assertThat(emptyResultSet.getType()).isEqualTo(ResultSet.TYPE_FORWARD_ONLY)),
 				DynamicTest.dynamicTest("concurrency",
-						() -> assertThat(resultSet.getConcurrency()).isEqualTo(ResultSet.CONCUR_READ_ONLY)),
+						() -> assertThat(emptyResultSet.getConcurrency()).isEqualTo(ResultSet.CONCUR_READ_ONLY)),
 				DynamicTest.dynamicTest("holdability",
-						() -> assertThat(resultSet.getHoldability()).isEqualTo(ResultSet.CLOSE_CURSORS_AT_COMMIT))
+						() -> assertThat(emptyResultSet.getHoldability()).isEqualTo(ResultSet.CLOSE_CURSORS_AT_COMMIT))
 
 		);
 	}
@@ -1494,23 +1559,16 @@ class ResultSetImplTests {
 			var name = method.getName();
 			return (name.startsWith("update") && !"updateRow".equals(name)) || name.matches("row.*ed");
 		});
-		var rowUpdates = testSupplier
-			.apply(method -> Set
-				.of("beforeFirst", "first", "last", "getRow", "absolute", "relative", "previous", "moveToCurrentRow",
-						"afterLast")
+		var positional = testSupplier
+			.apply(method -> Set.of("insertRow", "updateRow", "deleteRow", "refreshRow", "cancelRowUpdates")
 				.contains(method.getName()));
-		var positional = testSupplier.apply(method -> Set
-			.of("insertRow", "updateRow", "deleteRow", "refreshRow", "cancelRowUpdates", "moveToInsertRow")
-			.contains(method.getName()));
-		var getters = testSupplier.apply(method -> Set
-			.of("getRef", "getBlob", "getClob", "getNClob", "getSQLXML", "getNString", "getNCharacterStream",
-					"getArray", "getURL", "getRowId", "getUnicodeStream", "getCursorName")
-			.contains(method.getName())
-				|| "getObject".equals(method.getName()) && method.getParameterTypes().length == 2
-						&& method.getParameterTypes()[1].isAssignableFrom(Map.class));
+		var getters = testSupplier.apply(
+				method -> Set
+					.of("getRef", "getBlob", "getClob", "getNClob", "getSQLXML", "getNString", "getNCharacterStream",
+							"getRowId", "getUnicodeStream", "getCursorName")
+					.contains(method.getName()));
 
 		return Stream.of(DynamicContainer.dynamicContainer("updates", updates),
-				DynamicContainer.dynamicContainer("rowUpdates", rowUpdates),
 				DynamicContainer.dynamicContainer("positional", positional),
 				DynamicContainer.dynamicContainer("some getters", getters));
 	}
@@ -1541,9 +1599,9 @@ class ResultSetImplTests {
 
 	private ResultSet emptyResultSet() {
 		var statement = mock(StatementImpl.class);
-		var runResponse = mock(RunResponse.class);
+		var runResponse = mock(Neo4jTransaction.RunResponse.class);
 
-		var pullResponse = mock(PullResponse.class);
+		var pullResponse = mock(Neo4jTransaction.PullResponse.class);
 		given(pullResponse.records()).willReturn(List.of());
 
 		return new ResultSetImpl(statement, mock(Neo4jTransaction.class), runResponse, pullResponse, 1000, 0, 0);
@@ -1551,7 +1609,7 @@ class ResultSetImplTests {
 
 	private ResultSet setupWithValue(Value expectedValue, int maxFieldSize) throws SQLException {
 		var statement = mock(StatementImpl.class);
-		var runResponse = mock(RunResponse.class);
+		var runResponse = mock(Neo4jTransaction.RunResponse.class);
 
 		var boltRecord = mock(Record.class);
 		given(boltRecord.size()).willReturn(1);
@@ -1560,7 +1618,7 @@ class ResultSetImplTests {
 		given(boltRecord.get(LABEL)).willReturn(expectedValue);
 		given(boltRecord.keys()).willReturn(List.of(LABEL));
 
-		var pullResponse = mock(PullResponse.class);
+		var pullResponse = mock(Neo4jTransaction.PullResponse.class);
 		given(pullResponse.records()).willReturn(List.of(boltRecord));
 
 		return new ResultSetImpl(statement, mock(Neo4jTransaction.class), runResponse, pullResponse, 1000, 0,

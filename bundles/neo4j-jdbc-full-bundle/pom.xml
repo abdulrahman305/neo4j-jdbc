@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,7 +25,7 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-parent</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 		<relativePath>../../</relativePath>
 	</parent>
 
@@ -61,6 +61,11 @@
 			<artifactId>neo4j-jdbc-translator-impl</artifactId>
 		</dependency>
 		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
 			<groupId>org.assertj</groupId>
 			<artifactId>assertj-core</artifactId>
 			<scope>test</scope>
@@ -68,6 +73,11 @@
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
@@ -100,7 +110,7 @@
 						</goals>
 						<phase>generate-sources</phase>
 						<configuration>
-							<executable>bin/remove-shaded-dependencies-from-module-info.sh</executable>
+							<executable>${maven.multiModuleProjectDirectory}/bin/remove-shaded-dependencies-from-module-info.sh</executable>
 							<arguments>
 								<argument>${project.basedir}/../../neo4j-jdbc/src/main/java/module-info.java</argument>
 								<argument>${project.build.directory}/jpms/module-info.java</argument>
@@ -108,6 +118,26 @@
 							</arguments>
 							<skip>false</skip>
 						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.cyclonedx</groupId>
+				<artifactId>cyclonedx-maven-plugin</artifactId>
+				<configuration combine.self="append">
+					<!-- Everything is shaded, so the artifact is a component on its own, therefore we exclude the whole compile scope -->
+					<includeCompileScope>false</includeCompileScope>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.graalvm.buildtools</groupId>
+				<artifactId>native-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>add-reachability-metadata</id>
+						<goals>
+							<goal>add-reachability-metadata</goal>
+						</goals>
 					</execution>
 				</executions>
 			</plugin>
@@ -123,19 +153,48 @@
 						<configuration>
 							<artifactSet>
 								<includes>
+									<include>com.fasterxml.jackson.core:jackson-core</include>
+									<include>com.fasterxml.jackson.core:jackson-annotations</include>
+									<include>com.fasterxml.jackson.jr:*</include>
 									<include>io.github.cdimascio:dotenv-java</include>
 									<include>io.netty:*</include>
 									<include>io.r2dbc:*</include>
 									<include>org.jooq:*</include>
-									<include>org.neo4j:neo4j-jdbc:*</include>
+									<include>org.neo4j.bolt:*</include>
+									<include>org.neo4j:neo4j-cypher-dsl</include>
+									<include>org.neo4j:neo4j-cypher-dsl-schema-name-support</include>
+									<include>org.neo4j:neo4j-jdbc-authn-spi:*</include>
 									<include>org.neo4j:neo4j-jdbc-translator-spi:*</include>
 									<include>org.neo4j:neo4j-jdbc-translator-impl:*</include>
-									<include>org.neo4j:neo4j-cypher-dsl-schema-name-support</include>
-									<include>org.neo4j:neo4j-cypher-dsl</include>
+									<include>org.neo4j:neo4j-jdbc:*</include>
 									<include>org.reactivestreams:*</include>
 								</includes>
 							</artifactSet>
 							<relocations>
+								<relocation>
+									<pattern>com.fasterxml.jackson.core</pattern>
+									<shadedPattern>org.neo4j.jdbc.internal.shaded.jackson.core</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>com.fasterxml.jackson.jr</pattern>
+									<shadedPattern>org.neo4j.jdbc.internal.shaded.jackson.jr</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>META-INF/versions/11/com.fasterxml.jackson.core</pattern>
+									<shadedPattern>META-INF/versions/11/org.neo4j.jdbc.internal.shaded.jackson.core</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>META-INF/versions/17/com.fasterxml.jackson.core</pattern>
+									<shadedPattern>META-INF/versions/17/org.neo4j.jdbc.internal.shaded.jackson.core</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>META-INF/versions/21/com.fasterxml.jackson.core</pattern>
+									<shadedPattern>META-INF/versions/21/org.neo4j.jdbc.internal.shaded.jackson.core</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>META-INF/versions/22/com.fasterxml.jackson.core</pattern>
+									<shadedPattern>META-INF/versions/22/org.neo4j.jdbc.internal.shaded.jackson.core</shadedPattern>
+								</relocation>
 								<relocation>
 									<pattern>io.github.cdimascio.dotenv</pattern>
 									<shadedPattern>org.neo4j.jdbc.internal.shaded.dotenv</shadedPattern>
@@ -153,6 +212,10 @@
 									<shadedPattern>org.neo4j.jdbc.internal.shaded.jooq</shadedPattern>
 								</relocation>
 								<relocation>
+									<pattern>org.neo4j.bolt.connection</pattern>
+									<shadedPattern>org.neo4j.jdbc.internal.shaded.bolt</shadedPattern>
+								</relocation>
+								<relocation>
 									<pattern>org.neo4j.cypherdsl.core</pattern>
 									<shadedPattern>org.neo4j.jdbc.internal.shaded.cypherdsl</shadedPattern>
 								</relocation>
@@ -167,8 +230,19 @@
 							</relocations>
 							<transformers>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
+								<transformer implementation="ac.simons.maven.shade.NativeImagePropertiesTransformer" />
+								<transformer implementation="ac.simons.maven.shade.ReflectConfigTransformer" />
 							</transformers>
 							<filters>
+								<filter>
+									<artifact>com.fasterxml.jackson.*:*</artifact>
+									<excludes>
+										<exclude>META-INF/LICENSE</exclude>
+										<exclude>META-INF/MANIFEST.MF</exclude>
+										<exclude>META-INF/NOTICE</exclude>
+										<exclude>META-INF/**/module-info.class</exclude>
+									</excludes>
+								</filter>
 								<filter>
 									<artifact>io.github.cdimascio:*</artifact>
 									<excludes>
@@ -183,23 +257,26 @@
 										<exclude>META-INF/MANIFEST.MF</exclude>
 										<exclude>META-INF/io.netty.versions.properties</exclude>
 										<exclude>services/reactor.blockhound.integration.BlockHoundIntegration</exclude>
+										<exclude>META-INF/**/module-info.class</exclude>
 									</excludes>
 								</filter>
 								<filter>
 									<artifact>io.r2dbc:*</artifact>
 									<excludes>
 										<exclude>META-INF/MANIFEST.MF</exclude>
+										<exclude>META-INF/NOTICE</exclude>
 									</excludes>
 								</filter>
 								<filter>
-									<artifact>org.neo4j:neo4j-jdbc</artifact>
+									<artifact>org.jooq:*</artifact>
 									<excludes>
 										<exclude>META-INF/MANIFEST.MF</exclude>
 										<exclude>module-info.class</exclude>
+										<exclude>migrations/*</exclude>
 									</excludes>
 								</filter>
 								<filter>
-									<artifact>org.neo4j:neo4j-jdbc-translator-*</artifact>
+									<artifact>org.neo4j.bolt:*</artifact>
 									<excludes>
 										<exclude>META-INF/MANIFEST.MF</exclude>
 										<exclude>module-info.class</exclude>
@@ -213,11 +290,24 @@
 									</excludes>
 								</filter>
 								<filter>
-									<artifact>org.jooq:*</artifact>
+									<artifact>org.neo4j:neo4j-jdbc-authn-spi</artifact>
 									<excludes>
 										<exclude>META-INF/MANIFEST.MF</exclude>
 										<exclude>module-info.class</exclude>
-										<exclude>migrations/*</exclude>
+									</excludes>
+								</filter>
+								<filter>
+									<artifact>org.neo4j:neo4j-jdbc-translator-*</artifact>
+									<excludes>
+										<exclude>META-INF/MANIFEST.MF</exclude>
+										<exclude>module-info.class</exclude>
+									</excludes>
+								</filter>
+								<filter>
+									<artifact>org.neo4j:neo4j-jdbc</artifact>
+									<excludes>
+										<exclude>META-INF/MANIFEST.MF</exclude>
+										<exclude>module-info.class</exclude>
 									</excludes>
 								</filter>
 								<filter>
@@ -293,4 +383,33 @@
 			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<profile>
+			<id>native-image</id>
+			<activation>
+				<property>
+					<name>native</name>
+				</property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.graalvm.buildtools</groupId>
+						<artifactId>native-maven-plugin</artifactId>
+						<extensions>true</extensions>
+						<executions>
+							<execution>
+								<id>test-native</id>
+								<goals>
+									<goal>test</goal>
+								</goals>
+								<phase>verify</phase>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>

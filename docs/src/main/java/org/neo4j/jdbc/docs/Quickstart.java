@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -28,7 +28,7 @@ import java.util.List;
 
 import org.neo4j.jdbc.Neo4jDriver;
 
-@SuppressWarnings("unchecked")
+@SuppressWarnings({ "unchecked", "squid:S2068" })
 // tag::pt1[]
 public final class Quickstart {
 

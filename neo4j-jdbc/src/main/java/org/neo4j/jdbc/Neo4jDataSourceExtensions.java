@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,6 +19,8 @@
 package org.neo4j.jdbc;
 
 import javax.sql.DataSource;
+
+import org.neo4j.jdbc.tracing.Neo4jTracer;
 
 /**
  * Neo4j specific extensions to a {@link DataSource}.
@@ -101,10 +103,30 @@ public sealed interface Neo4jDataSourceExtensions extends DataSource permits Neo
 	void setTransportProtocol(String transportProtocol);
 
 	/**
+	 * Configures the URL to connect to, overriding any other configuration via properties
+	 * above.
+	 * @param url the Neo4j connection URL
+	 * @since 6.3.0
+	 */
+	void setUrl(String url);
+
+	/**
 	 * Sets a connection property on the data source.
 	 * @param name the name of the connection property to be set
 	 * @param value the value of the connection property to be set
 	 */
 	void setConnectionProperty(String name, String value);
+
+	/**
+	 * Configures a {@link Neo4jTracer tracer} to be used with this datasource. When using
+	 * a non-null value both the execution of queries and the iteration of result-sets
+	 * will be traced. Be aware that statements will be part of the spans tags, so to make
+	 * sure that you are using parameterized statements for all queries that might contain
+	 * sensitive parameters (parameters are never part of any span).
+	 * @param tracer the tracer to be used, maybe {@literal null}, in which case no
+	 * tracing will be used
+	 * @since 6.3.0
+	 */
+	void setTracer(Neo4jTracer tracer);
 
 }

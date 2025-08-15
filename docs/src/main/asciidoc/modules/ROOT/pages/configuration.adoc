@@ -8,42 +8,12 @@ The class is public API.
 
 We also provide `org.neo4j.jdbc.Neo4jDataSource` as `javax.sql.DataSource`.
 
-== Causal clustering and bookmarks
-
-The Neo4j JDBC Driver uses bookmarks by default to provide causal consistency in all Neo4j deployments.
-Bookmarks are managed on the driver level itself, not on the connections spawned by an instance of the driver, so all connections spawned by one instance will partake in the same causal chain of transactions.
-Connections from different driver instances will not use the same set of bookmarks and there is no built-in machinery that would enable this.
-If you want or need this, you can directly access the `Neo4jDriver` type to retrieve the current set of known bookmarks and pass them to another driver instance.
-
-== Neo4j transactional metadata
-
-Neo4j supports attaching metadata to transactions, see https://neo4j.com/docs/cypher-manual/current/clauses/transaction-clauses/#query-listing-transactions[`SHOW TRANSACTIONS`].
-As there is no explicit transaction object in the JDBC specification, the Neo4j JDBC driver needs another mechanism to make these configurable.
-
-The JDBC driver provides the extension interface `Neo4jMetadataWriter`.
-Our driver, the connection implementation, and all statement variants can be unwrapped accordingly.
-The configuration is additive: metadata configured for a driver instance will be used for all connections spawned from that driver, connections can add further metadata, and  statements can also add their own metadata.
-Metadata added on a statement has precedence over connection metadata which in turn has precedence over driver metadata:
-
-[source, java, tabsize=4]
-.Configuring transactional metadata
-----
-include::{examplesDir}/TransactionMetadata.java[tag=example]
-----
-
-The output will be similar to this:
-
-[source,text]
-----
-Juli 17, 2024 1:18:16 PM org.neo4j.jdbc.docs.TransactionMetadata main
-INFORMATION: {md_from_driver=v1, md_from_connection=v2, md_from_stmt=v3, will_be_overwritten=v4}
-----
-
 == URL and connection properties
 
 The canonical URL format for the Neo4j JDBC Driver is
 
 [source, text]
+.Canonical JDBC URL format for Neo4j JDBC Driver
 ----
 jdbc:neo4j://<host>:<port>/<database>?param1=value1&param2=value2
 ----
@@ -65,6 +35,21 @@ The driver supports the following URI schemes, which tweak the security configur
 
 `bolt` URI schemes are not supported.
 ====
+
+Last but not least, you can add `http` as sub-protocol when using the Neo4j-JDBC driver against a Neo4j instance from 2025.06 on with the Http Query-API enabled:
+
+[source, text]
+
+----
+jdbc:neo4j:http//<host>:<port>/<database>?param1=value1&param2=value2
+jdbc:neo4j:https//<host>:<port>/<database>?param1=value1&param2=value2
+----
+
+Usually, Neo4j provides the HTTP port on 7474 or 7473. When you don't specify the port, the Neo4j JDBC Driver defaults to 80 and 443 for http and https respectively.
+
+WARNING: The query API behaves different in a couple of edge cases. Especially, for big results the driver will materialize them completely and not stream individual records as it does over the binary neo4j protocol. Also, queries that produce n results and may fail on the nth+1 result, will fail immediate when run over HTTP. +
+ +
+ Some features such as transactional metadata are not supported at all over HTTP.
 
 The driver accepts the following configuration arguments, either as properties or as URL query parameters:
 
@@ -139,6 +124,16 @@ If you disable it, it will only be disabled for the specific connection.
 Other connections retrieved from the driver instance to the same or to other databases are not affected, and the individual connections will still manage their bookmarks.
 |`true`
 
+|`viewDefinitions`
+|`String`
+|A file, http or https URL pointing to a valid JSON file containing definitions for xref:cypher_backed_views.adoc[Cypher-backed views].
+|`null`
+
+|`authn.supplier`
+|`String`
+|The name of an authentication supplier, can be used to plugin various SSO systems such as Keycloak, with automatic token refresh. See below xref:authentication[] for more information.
+|`null`
+
 |===
 
 == Getting a driver or a connection instance
@@ -150,7 +145,7 @@ The easiest way to acquire a connection is directly through the `java.sql.Driver
 [source, java, tabsize=4]
 .Acquiring a JDBC connection to a Neo4j server
 ----
-include::{examplesDir}/Configuration.java[tag=cdm]
+include::{examplesDir}/java/Configuration.java[tag=cdm]
 ----
 
 While our connection implementation is thread-safe, it allows only one concurrent transaction per connection (as dictated by the JDBC specification).
@@ -163,7 +158,7 @@ If you need access to an instance of the Neo4j driver itself, you can use the fo
 [source, java, tabsize=4]
 .Acquiring an instance of the Neo4j JDBC Driver
 ----
-include::{examplesDir}/Configuration.java[tag=ddm]
+include::{examplesDir}/java/Configuration.java[tag=ddm]
 ----
 
 == Securing your connection by using SSL
@@ -219,3 +214,638 @@ This is essentially a https://www.dotenv.org[.dotenv] file containing the inform
 These files can be directly used via `Neo4jDriver.fromEnv()` (see xref:usage.adoc#connect-dotenv[Getting a connection via environment variables]).
 This method exists in several overloads, which let you configure both filename and directory.
 Additionally, the builder lets you configure options that are not contained in the files from Aura.
+
+== Causal clustering and bookmarks
+
+The Neo4j JDBC Driver uses bookmarks by default to provide causal consistency in all Neo4j deployments.
+Bookmarks are managed on the driver level itself, not on the connections spawned by an instance of the driver, so all connections spawned by one instance will partake in the same causal chain of transactions.
+Connections from different driver instances will not use the same set of bookmarks and there is no built-in machinery that would enable this.
+If you want or need this, you can directly access the `Neo4jDriver` type to retrieve the current set of known bookmarks and pass them to another driver instance.
+
+== Neo4j transactional metadata
+
+Neo4j supports attaching metadata to transactions, see https://neo4j.com/docs/cypher-manual/current/clauses/transaction-clauses/#query-listing-transactions[`SHOW TRANSACTIONS`].
+As there is no explicit transaction object in the JDBC specification, the Neo4j JDBC driver needs another mechanism to make these configurable.
+
+The JDBC driver provides the extension interface `Neo4jMetadataWriter`.
+Our driver, the connection implementation, and all statement variants can be unwrapped accordingly.
+The configuration is additive: metadata configured for a driver instance will be used for all connections spawned from that driver, connections can add further metadata, and  statements can also add their own metadata.
+Metadata added on a statement has precedence over connection metadata which in turn has precedence over driver metadata:
+
+[source, java, tabsize=4]
+.Configuring transactional metadata
+----
+include::{examplesDir}/java/TransactionMetadata.java[tag=example]
+----
+
+The output will be similar to this:
+
+[source,text]
+----
+Juli 17, 2024 1:18:16 PM org.neo4j.jdbc.docs.TransactionMetadata main
+INFORMATION: {md_from_driver=v1, md_from_connection=v2, md_from_stmt=v3, will_be_overwritten=v4}
+----
+
+== Logging
+
+=== Via standard Java settings
+
+To generate a useful and detailed log, you must configure `java.util.logging`. This can be done either through a configuration file or programmatically.
+The following section includes an example configuration that sets the global logging level to `INFO`, Neo4j JDBC Driver itself to `DEBUG` and everything that is network related to `WARN`:
+
+[source,properties]
+.Logging configuration for the Neo4j JDBC Driver that logs all information
+----
+.level = INFO
+handlers=java.util.logging.ConsoleHandler
+
+# The handler must be configured for the lowest level it should catch
+java.util.logging.ConsoleHandler.level=FINEST
+
+# Enables all Logging for the JDBC Driver
+org.neo4j.jdbc.level=ALL
+# But reduces the noise on the network and the result set
+org.neo4j.jdbc.result-set.level=WARNING
+org.neo4j.jdbc.network.level=WARNING
+# This is an example how to configure the outbound and inbound messages
+org.neo4j.jdbc.network.OutboundMessageHandler.level=FINE
+org.neo4j.jdbc.network.InboundMessageHandler.level=FINE
+
+# This produces a date, followed by the level, 3 dashes, the message and the source of the log if available
+java.util.logging.SimpleFormatter.format = %1$tFT%1$tk:%1$tM:%1$tS.%1$tL%1$tz %4$-15s --- %5$s [%2$s]%n
+----
+
+Such a file must be passed to the running Java program as a system property to Java itself with:
+
+[source,bash]
+----
+java -Djava.util.logging.config.file=docs/src/main/resources/logging-to-console.properties <your program>
+----
+
+Capturing logs to a file requires to change the handler:
+
+[source,properties]
+.Logging configuration for the Neo4j JDBC Driver that writes all JDBC logs to a file
+----
+.level = INFO
+handlers=java.util.logging.ConsoleHandler
+
+# Keep everything by default at INFO
+java.util.logging.ConsoleHandler.level=INFO
+
+# The handler must be configured for the lowest level it should catch
+java.util.logging.FileHandler.level=FINEST
+java.util.logging.FileHandler.pattern=jdbc.log
+# XML Format by default
+# java.util.logging.FileHandler.formatter=java.util.logging.SimpleFormatter
+
+# Change the handler for JDBC
+org.neo4j.jdbc.handlers=java.util.logging.FileHandler
+# Keep the rest as above
+org.neo4j.jdbc.level=ALL
+org.neo4j.jdbc.result-set.level=WARNING
+org.neo4j.jdbc.network.level=WARNING
+org.neo4j.jdbc.network.OutboundMessageHandler.level=FINE
+org.neo4j.jdbc.network.InboundMessageHandler.level=FINE
+
+java.util.logging.SimpleFormatter.format = %1$tFT%1$tk:%1$tM:%1$tS.%1$tL%1$tz %4$-15s --- %5$s [%2$s]%n
+----
+
+NOTE: The diagnosability features of the JDBC driver are based on the standard `java.util.logging` framework. Configuration of that framework itself is out of scope for this documentation.
+      For a complete overview you might want to start at https://docs.oracle.com/en/java/javase/17/core/java-logging-overview.html["Java Logging Overview"].
+      The formatter Java uses is the https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/Formatter.html#dt[`java.util.Formatter`.]
+
+=== Inside a Spring Boot application
+
+The Neo4j JDBC Driver will integrate itself into the Spring Boot logging configuration and take all relevant format and other settings from there.
+The levels can be configured with the levels Spring does understand.
+The following configuration is equivalent to the one above:
+
+[source,bash]
+.Logging configuration for the Neo4j JDBC Driver in a Spring Boot configuration file
+----
+logging.level.org.neo4j.jdbc=trace
+logging.level.org.neo4j.jdbc.result-set=warn
+logging.level.org.neo4j.jdbc.network=warn
+logging.level.org.neo4j.jdbc.network.OutboundMessageHandler=debug
+logging.level.org.neo4j.jdbc.network.InboundMessageHandler=debug
+----
+
+=== Inside a Quarkus application
+
+The Neo4j JDBC Driver will integrate itself into the Quarkus logging configuration and take all relevant format and other settings from there.
+The levels can be configured with the levels Quarkus does understand.
+The following configuration is equivalent to the ones above:
+
+[source,bash]
+.Logging configuration for the Neo4j JDBC Driver in a Quarkus configuration file
+----
+quarkus.log.category."org.neo4j.jdbc".min-level=TRACE
+quarkus.log.category."org.neo4j.jdbc".level=TRACE
+quarkus.log.category."org.neo4j.jdbc.result-set".level=DEBUG
+quarkus.log.category."org.neo4j.jdbc.network".level=WARNING
+quarkus.log.category."org.neo4j.jdbc.network.OutboundMessageHandler".level=DEBUG
+quarkus.log.category."org.neo4j.jdbc.network.InboundMessageHandler".level=DEBUG
+----
+
+=== SQL Translations
+
+The SQL translators use the logger `org.neo4j.jdbc.translator`; processed SQL and its original sources is logged at level `FINE` on `org.neo4j.jdbc.statement.SQL`.
+
+== Metrics
+
+The Neo4j JDBC Driver will publish metrics via https://micrometer.io[Micrometer].
+If you put Micrometer on your classpath, no further configuration is necessary.
+This is for example automatically the case with https://docs.spring.io/spring-boot/reference/actuator/metrics.html[Spring Boot Actuator] or https://quarkus.io/guides/telemetry-micrometer[Micrometer for Quarkus].
+To make best use of this feature, you will additionally configure your https://docs.micrometer.io/micrometer/reference/implementations.html[monitoring system].
+
+The Neo4j JDBC Driver does publish the following metrics:
+
+`org.neo4j.jdbc.connections`:: a gauge representing the number of open connections, tagged with `url` to which the driver is connected
+`org.neo4j.jdbc.statements`:: a gauge representing the number of open statements, tagged with both  the `url` to which the statement is opened and the JDBC type of the statement (either `Statement`, `PreparedStatement` or `CallableStatement`
+)
+`org.neo4j.jdbc.queries`:: a composite meter containing the counts of successful and failed queries and a timer measuring the duration of queries
+`org.neo4j.jdbc.cached-translations`:: a gauge representing the number of cached SQL to cypher translations
+
+== Tracing
+
+The Neo4j JDBC Driver supports tracing and will provide traces spans for the following operations on JDBC `Statement` instances:
+
+* `#execute`
+* `#executeQuery`
+* `#executeUpdate`
+
+and all overloads thereof and in all inheriting types.
+In addition, when using a JDBC `ResultSet`, it will open a span when the result set is first moved from being before the first row until it is either moved beyond the last row or actively closed.
+Spans will contain various events, such as when a query has been actually executed by the Neo4j database or when a batch of records has been pulled from the database.
+
+The feature is optional: when you want to use it, you have to bring in additional dependencies.
+This applies to all distributed versions, including the full bundles, so that an optional feature doesn't make the bundles bigger.
+For Maven, use this additional dependency declaration:
+
+[source,xml,subs="verbatim,attributes"]
+.Maven dependency that allows you to configure tracing
+----
+<dependency>
+    <groupId>{group-id}</groupId>
+    <artifactId>neo4j-jdbc-tracing-micrometer</artifactId>
+    <version>{version}</version>
+</dependency>
+----
+
+And for Gradle you would want to declare the following runtime dependency:
+
+[source,groovy,subs="verbatim,attributes"]
+.Gradle dependency that allows you to configure tracing
+----
+dependencies {
+    runtimeOnly '{group-id}:neo4j-jdbc-tracing-micrometer:{version}'
+}
+----
+
+This dependency brings in https://docs.micrometer.io/tracing/reference/[Micrometer Tracing].
+Micrometer Tracing allows you to bind to various tracers and exporters, such as Zipkin or OpenTelemetry.
+
+Once you have a Micrometer Tracer, you can configure a `Neo4jDataSource` like this:
+
+[source,java, tabsize=4, indent=0]
+.A `Neo4jDataSource` spawning connections that trace their usage
+----
+import javax.sql.DataSource;
+
+import org.neo4j.jdbc.Neo4jDataSource;
+import org.neo4j.jdbc.tracing.micrometer.Neo4jTracingBridge;
+
+import io.micrometer.tracing.Tracer;
+
+public class TracingExampleSetup {
+
+    DataSource neo4jDataSource() {
+
+        Tracer tracer = Tracer.NOOP; // <.>
+        var neo4jDataSource = new Neo4jDataSource();
+        neo4jDataSource.setUrl("jdbc:neo4j://yourhost:7687");
+        neo4jDataSource.setPassword("neo4j");
+        neo4jDataSource.setUser("verysecret");
+        neo4jDataSource.setTracer(Neo4jTracingBridge.to(tracer)); // <.>
+        return neo4jDataSource;
+    }
+}
+----
+<.> In most scenarios, your application framework will provide a Micrometer tracer instance for you
+<.> With this call you enable tracing in the data source and all connections spawned from it
+
+You can also enable tracing on individual connections by unwrapping them into the `Neo4jConnection` extension like this:
+
+[source,java, tabsize=4, indent=0]
+.Enable tracing for an individual connection
+----
+import java.sql.Connection;
+import java.sql.DriverManager;
+
+import org.neo4j.jdbc.Neo4jConnection;
+import org.neo4j.jdbc.tracing.micrometer.Neo4jTracingBridge;
+
+import io.micrometer.tracing.Tracer;
+
+public class TracingExampleSetup {
+
+    Connection connection() {
+
+        Tracer tracer = Tracer.NOOP;
+        Neo4jConnection connection = DriverManager.getConnection("jdbc:neo4j://yourhost:7687", "neo4j", "verysecret")
+            .unwrap(Neo4jConnection.class); // <.>
+        connection.setTracer(Neo4jTracingBridge.to(tracer)); // <.>
+    }
+}
+----
+<.> Unwrap the connection into our extension so that you can configure the tracer
+<.> Configure the tracer
+
+TIP: In case you neither want to work with a data source nor individual connections, use `Neo4jDriver.registerTracer(Neo4jTracingBridge.to(tracer))` to register the tracer with all Neo4j drivers that are registered with the JDBC `DriverManager`.
+
+=== Using tracing with Spring Boot
+
+The tracing implementation that is provided by the Neo4j JDBC Driver utilizes Micrometer Tracing, which is well accepted in the Spring Boot ecosystem, but also in Quarkus, Micronaut and others.
+We provide a few examples, but refer to your frameworks documentation on how to configure tracing.
+
+If you are happy to configure tracing for all connections acquired from the `DriverManager`, configure tracing like this:
+
+[source,java, tabsize=4, indent=0]
+.Configure tracing for all drivers registered with `DriverManager`
+----
+import io.micrometer.tracing.Tracer;
+import org.neo4j.jdbc.tracing.micrometer.Neo4jTracingBridge;
+
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class TracingConfiguration {
+
+    @Bean
+    InitializingBean neo4jTracingInitializer(Tracer tracer) {
+        return () -> Neo4jDriver.registerTracer(Neo4jTracingBridge.to(tracer));
+    }
+}
+----
+
+Otherwise, use a custom datasource as shown below.
+
+==== Configuring the tracing datasource
+
+Usually, Spring Boot configures a `HikariDataSource` based on you driver.
+Hikari provides connection pooling, and you should not ditch that.
+There's no need to create your own data source properties for all configuration values, you can just inject it like this:
+
+[source,java, tabsize=4, indent=0]
+.Configure a tracing and pooled data source with Spring Boot
+----
+import javax.sql.DataSource;
+
+import org.neo4j.jdbc.Neo4jDataSource;
+import org.neo4j.jdbc.tracing.micrometer.Neo4jTracingBridge;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import io.micrometer.tracing.Tracer;
+
+@Configuration
+class TracingTestConfiguration {
+
+    @Bean
+    DataSource neo4jDataSource(Tracer tracer, DataSourceProperties dataSourceProperties) {
+
+        var neo4jDataSource = new Neo4jDataSource();
+        neo4jDataSource.setUrl(dataSourceProperties.getUrl());
+        neo4jDataSource.setPassword(dataSourceProperties.getPassword());
+        neo4jDataSource.setUser(dataSourceProperties.getUsername());
+        neo4jDataSource.setTracer(Neo4jTracingBridge.to(tracer));
+
+        var cfg = new HikariConfig();
+        cfg.setDataSource(neo4jDataSource);
+        return new HikariDataSource(cfg);
+    }
+}
+----
+
+Bring `org.springframework.boot:spring-boot-starter-actuator` onto your class path too, and it will configure Micrometer for you.
+
+TIP: The setup of your data source stays the same: no change is required here for the following examples to work, as our Tracing API will automatically pick the correct tracer through Micrometer!
+
+==== Exporting to Zipkin
+
+To export your traces to Zipkin, add `io.micrometer:micrometer-tracing-bridge-brave` and `io.zipkin.reporter2:zipkin-reporter-brave` and set `management.zipkin.tracing.export.enabled` to `true` in your Spring application.
+
+You should see spans like this:
+
+image::zipkintracing.jpg[]
+
+==== Exporting via OpenTelemetry
+
+https://opentelemetry.io[OpenTelemetry] allows to export not only traces, but metrics and logging too.
+
+Here's an example how to use https://www.dash0.com[Dash0] via OpenTelemetry.
+The exporter should work the same for other services.
+OpenTelemetry has split its SDK into several modules, hence you will first import their BOM into your build file. Here's an example for Maven:
+
+[source,xml]
+.Snippet from a Maven build file to include the OpenTelemetry BOM
+----
+<dependency>
+    <groupId>io.opentelemetry</groupId>
+    <artifactId>opentelemetry-bom</artifactId>
+    <version>1.47.0</version>
+    <type>pom</type>
+    <scope>import</scope>
+</dependency>
+----
+
+First you need to bring in the bridge from Micrometer to OpenTelemetry via: `io.micrometer:micrometer-tracing-bridge-otel`, so that Micrometer pushes into that SDK.
+Next, bring in the following dependencies so that Spring Boot can configure the exporter:
+
+* `io.opentelemetry:opentelemetry-sdk`
+* `io.opentelemetry:opentelemetry-exporter-common`
+* `io.opentelemetry:opentelemetry-exporter-otlp`
+* `io.opentelemetry:opentelemetry-exporter-sender-jdk`
+
+In the case of Dash0, the application configuration will look similar to this:
+
+[source,properties]
+.Using the OpenTelemetry exporter in Spring Boot towards Dash0
+----
+management.otlp.tracing.export.enabled=true
+management.otlp.tracing.endpoint=https://ingress.eu-west-1.aws.dash0.com/v1/traces
+management.otlp.tracing.headers.Authorization=Bearer auth_XX_your_token_XX
+
+management.otlp.metrics.export.step=30s
+management.otlp.metrics.export.enabled=true
+management.otlp.metrics.export.url=https://ingress.eu-west-1.aws.dash0.com/v1/metrics
+management.otlp.metrics.export.headers.Authorization=Bearer auth_XX_your_token_XX
+----
+
+The trace from our Movie application looks like this:
+
+image::dash0tracing.jpg[]
+
+[#authentication]
+== Custom authentication
+
+The Neo4j JDBC driver provides the ability to use a custom authentication supplier in addition to JDBCs standard ways of authentication, such as using `java.sql.DriverManager#getConnection(java.lang.String, java.lang.String, java.lang.String)` or `java.sql.Driver#connect` for authentication with the Neo4j server.
+
+An authentication supplier is in Java terms a `Supplier<org.neo4j.jdbc.authn.api.Authentication>`.
+An `Authentication` instances is an abstract representation of an arbitrary authentication to be presented to the Neo4j server and can contain a principal and its credentials (username and password), a token or other ways of confirming an identity.
+
+The interface itself offers the following factories:
+
+`Authentication#usernameAndPassword`:: Creates a simple username and password based authentication, which is what is used internally already with the default methods
+`Authentication#none`:: Disables authentication
+`Authentication#bearer`:: Creates a bearer-token based authentication
+
+The latter allows to set an expiration date for the token.
+If the token expires, that is used after the expiration date, the supplier is asked for a new one.
+This allows configuring the Neo4j JDBC driver in such a way that it can grab tokens from an SSO provider, such as https://www.keycloak.org[Keycloak] or https://www.okta.com[Okta], and authenticate itself with those tokens against Neo4j and automatically refresh those tokens when they expire.
+
+In addition, there are two interfaces, `CustomAuthentication` and `ExpiringAuthentication` that can be implemented in case the above factories are not sufficient.
+
+There are several ways to pass an authentication supplier:
+
+* Creating a library with your custom authentication supplier and a small factory for it implementing `AuthenticationSupplierFactory`: It will be automatically be loaded into the JDBC driver and be used when the JDBC property `authn.supplier` is set to the name of the factory
+* On the driver itself, when unwrapped to a `Neo4jDriver`, there is `driver#connect(String, Properties, Supplier)`. The given supplier will have precedence over any authentication information in the `properties` parameter
+* Setting a supplier instance on a particular instance of the driver with `driver#setAuthenticationSupplier(Supplier)`
+* Registering a global supplier instance with `Neo4jDriver#registerAuthenticationSupplier` that will be used for all connections spawned from the `DriverManager`
+* The convenient builder methods present as static methods on `Neo4jDriver` allowing to configure the driver from the environment (see xref:usage.adoc#connect-dotenv[Getting a connection via environment variables]) allow to specify the supplier, too
+
+The precedence is as follows:
+
+. If there's a supplier passed to `connect` it has precedence over the drivers locally configured supplier respectively the global one and any properties
+. If there's a property named `authn.supplier` in the JDBC properties and an authentication supplier factory with that name is available, a supplier will be sourced from that factory and used
+. The supplier configured per driver or the global one has precedence over any properties
+. Properties will be used as per JDBC standard when there is no explicit or implicit authentication supplier
+
+The driver will only call the supplier when no token has been retrieved yet or when the first token expires.
+Any authentication supplier implementation can safely assume that the second call for a token means the first token is expired, so that the supplier does not need to manage state.
+
+NOTE: The underlying bolt protocol and the Neo4j Server might not work reliable with very short-lived authentication tokens (i.e. with a lifespan under 5 seconds). This restriction might be lifted in the future, but as of release 6.6.0 you might want to refrain from very short-lived tokens.
+
+=== Keycloak example
+
+The following classes shows an example based on Keycloaks `AuthzClient`.
+The supplier will grab tokens from a Keycloak instance and store their expiration date along with the JWT token.
+The initial ask for a token will always be answered with a completely new one, each follow-up call will use the client to refresh the token.
+
+WARNING: There is no need to copy the below code into your own application. We actually do ship this authentication supplier with the optional `org.neo4j:neo4j-jdbc-authn-kc` module. The supplier is part of our semver api contract and can either be used directly or via the service loader mechanism, which is also demonstrated in the following documentation.
+
+[source,java,tabsize=4,indent=0]
+.`KCAuthenticationSupplier`, as an example of an authentication supplier refreshing a token when necessary
+----
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+
+import com.fasterxml.jackson.jr.ob.JSON;
+import org.keycloak.authorization.client.AuthzClient;
+import org.keycloak.authorization.client.Configuration;
+import org.keycloak.authorization.client.util.Http;
+import org.keycloak.representations.AccessTokenResponse;
+import org.neo4j.jdbc.authn.spi.Authentication;
+
+public final class KCAuthenticationSupplier implements Supplier<Authentication> {
+
+    public static Supplier<Authentication> of(String user, String password, Configuration configuration) {
+        return new KCAuthenticationSupplier(user, password, configuration);
+    }
+
+    private final String username;
+
+    private final String password;
+
+    private final Configuration cfg;
+
+    private final AuthzClient authzClient;
+
+    private final Http http;
+
+    private final String url;
+
+    private final AtomicReference<TokensAndExpirationTime> currentToken = new AtomicReference<>();
+
+    KCAuthenticationSupplier(String user, String password, Configuration cfg) {
+        this.username = user;
+        this.password = password;
+        this.cfg = cfg;
+        this.authzClient = AuthzClient.create(cfg);
+        this.url = "%s/realms/%s/protocol/openid-connect/token".formatted(cfg.getAuthServerUrl(), cfg.getRealm());
+        this.http = new Http(cfg, cfg.getClientCredentialsProvider());
+    }
+
+    @Override
+    public Authentication get() {
+        return this.currentToken.updateAndGet(previous -> {
+            if (previous == null) {
+                return get0();
+            }
+            return refresh0(previous.refreshToken());
+        }).toAuthentication();
+    }
+
+    TokensAndExpirationTime get0() {
+        try {
+            return TokensAndExpirationTime.of(this.authzClient.obtainAccessToken(this.username, this.password));
+        }
+        catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    TokensAndExpirationTime refresh0(String refreshToken) {
+        try {
+            return TokensAndExpirationTime.of(this.http.<AccessTokenResponse>post(this.url)
+                .authentication()
+                .client()
+                .form()
+                .param("grant_type", "refresh_token")
+                .param("refresh_token", refreshToken)
+                .param("client_id", this.cfg.getResource())
+                .param("client_secret", (String) this.cfg.getCredentials().get("secret"))
+                .response()
+                .json(AccessTokenResponse.class)
+                .execute());
+        }
+        catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    record TokensAndExpirationTime(String accessToken, Instant expiresAt, String refreshToken) {
+
+        static final Base64.Decoder DECODER = Base64.getDecoder();
+
+        static TokensAndExpirationTime of(AccessTokenResponse accessTokenResponse) throws IOException {
+            var chunks = accessTokenResponse.getToken().split("\\.");
+            var payload = JSON.std.mapFrom(DECODER.decode(chunks[1]));
+            var exp = Instant.ofEpochSecond(((Number) payload.get("exp")).longValue());
+            return new TokensAndExpirationTime(accessTokenResponse.getToken(), exp,
+                    accessTokenResponse.getRefreshToken());
+        }
+
+        Authentication toAuthentication() {
+            return Authentication.bearer(this.accessToken, this.expiresAt);
+        }
+
+    }
+
+}
+----
+
+Again, for using the above supplier add the following dependency to your class- or module-path and don't copy the code, which is only displayed here as an example how you would write your own authentication supplier:
+
+[source,xml,subs="verbatim,attributes"]
+.Maven dependency for the core Neo4j JDBC Driver artifact
+----
+<dependency>
+    <groupId>{group-id}</groupId>
+    <artifactId>neo4j-jdbc-authn-kc</artifactId>
+    <version>{version}</version>
+</dependency>
+----
+
+The easiest way to use the supplier now is via the build-in loader, so that you can stick purely to the JDBC api:
+
+[source,java]
+.Using a custom authentication supplier via the `authn.supplier` config option:
+----
+@Test
+void authenticationSupplierFactoriesShouldWork() throws SQLException {
+
+    var properties = new Properties();
+    properties.put("enableSQLTranslation", "true");
+
+    properties.put("user", "william.foster");
+    properties.put("password", "d-fens");
+
+    properties.put("authn.supplier", "kc"); // <.>
+    properties.put("authn.kc.authServerUrl", "http://localhost:%d".formatted(KEYCLOAK.getHttpPort())); // <.>
+    properties.put("authn.kc.realm", "neo4j-sso-test");
+    properties.put("authn.kc.clientId", "neo4j-jdbc-driver");
+    properties.put("authn.kc.clientSecret", "QcWXnTg8qJpVMnIvm8Ev8gp1PqJitZu4");
+
+    try (var connection = DriverManager.getConnection(neo4jUri, properties); // <.>
+            var stmt = connection.createStatement();
+            var rs = stmt.executeQuery("SELECT 1")) {
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getInt(1)).isOne();
+    }
+}
+----
+<.> Indicate that you want to use the Keycloak authentication supplier (named `kc` in our distribution)
+<.> This and the following properties will be passed to the authentication system so that it can create authentication with Keycloak
+<.> This is a pure JDBC spec call
+
+In case you don't want to use the automatic loader for authentication supplier factories, or you did write a completely custom authentication supplier and don't want to provide `services` and corresponding module descriptions, there are several other ways of using an authentication supplier.
+
+The most JDBC complaint way is registering it for the global driver like this:
+
+[source,java]
+.Registering an instance of the authentication supplier globally
+----
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.util.function.Supplier;
+
+import org.keycloak.authorization.client.Configuration;
+import org.neo4j.jdbc.authn.kc.KCAuthenticationSupplier;
+import org.neo4j.jdbc.authn.spi.Authentication;
+import org.neo4j.jdbc.Neo4jDriver;
+
+class Example {
+
+	public static void main(String...a) throws Exception {
+		Supplier<Authentication> authenticationSupplier = KCAuthenticationSupplier.of("user", "pass", new Configuration());
+        Neo4jDriver.registerAuthenticationSupplier(authenticationSupplier);
+        Connection connection = DriverManager.getConnection("neo4j+s://xyz.databases.neo4j.io");
+    }
+}
+----
+
+The advantage here is that it makes sure that all applications that use the Neo4j JDBC Driver in a JDBC compliant way over the `DriverManager` will automatically use the authentication supplier.
+Hence, the above setting is most likely the easiest way for integrations with frameworks like Spring Boot, in which you could configure the global supplier through an `org.springframework.beans.factory.InitializingBean`.
+Alternatively use the driver builder or manually create an instance of the driver:
+
+[source,java]
+.Creating an explicit instance of `Neo4jDriver` so that the `connect` overload taking in an authentication supplier is visible
+----
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.util.Properties;
+import java.util.function.Supplier;
+
+import org.keycloak.authorization.client.Configuration;
+import org.neo4j.jdbc.authn.kc.KCAuthenticationSupplier;
+import org.neo4j.jdbc.authn.spi.Authentication;
+import org.neo4j.jdbc.Neo4jDriver;
+
+class Example {
+
+    public static void main(String...a) throws Exception {
+        Supplier<Authentication> authenticationSupplier = KCAuthenticationSupplier.of("user", "pass", new Configuration());
+        Neo4jDriver.registerAuthenticationSupplier(authenticationSupplier);
+        Neo4jDriver driver = new Neo4jDriver();
+        Connection connection = driver.connect("neo4j+s://xyz.databases.neo4j.io", new Properties(), authenticationSupplier);
+    }
+}
+----
+
+This alternative is feasible in any application for which you are in sole control of creating connections.
+
+TIP: If you need to against Keycloak, the Neo4j JDBC driver does ship everything you need, and you are good to go.
+Just include the Maven module and apply the recommended way of configuring the supplier via JDBC properties.
+Write a custom authentication supplier only for other authentication needs.

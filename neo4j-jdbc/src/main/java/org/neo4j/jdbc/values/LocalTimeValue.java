@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -31,7 +31,7 @@ import java.time.format.DateTimeFormatterBuilder;
 public final class LocalTimeValue extends AbstractObjectValue<LocalTime> {
 
 	private static final DateTimeFormatter FORMATTER = new DateTimeFormatterBuilder().appendLiteral("TIME '")
-		.append(DateTimeFormatter.ISO_TIME)
+		.append(DateTimeFormatter.ISO_LOCAL_TIME)
 		.appendLiteral('\'')
 		.toFormatter();
 

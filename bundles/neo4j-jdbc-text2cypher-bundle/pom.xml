@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,7 +25,7 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-parent</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 		<relativePath>../../</relativePath>
 	</parent>
 
@@ -79,6 +79,14 @@
 	<build>
 		<plugins>
 			<plugin>
+				<groupId>org.cyclonedx</groupId>
+				<artifactId>cyclonedx-maven-plugin</artifactId>
+				<configuration combine.self="append">
+					<!-- Everything is shaded, so the artifact is a component on its own, therefore we exclude the whole compile scope -->
+					<includeCompileScope>false</includeCompileScope>
+				</configuration>
+			</plugin>
+			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
 				<executions>
@@ -95,6 +103,7 @@
 										<exclude>META-INF/LICENSE</exclude>
 										<exclude>META-INF/LICENSE.txt</exclude>
 										<exclude>META-INF/MANIFEST.MF</exclude>
+										<exclude>META-INF/NOTICE</exclude>
 										<exclude>META-INF/native-image/**</exclude>
 										<exclude>META-INF/io.netty.versions.properties</exclude>
 										<exclude>META-INF/okio.kotlin_module</exclude>

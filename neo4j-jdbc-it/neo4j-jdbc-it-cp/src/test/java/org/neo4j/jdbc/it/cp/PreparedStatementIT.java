@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -62,7 +62,6 @@ import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.neo4j.jdbc.Neo4jPreparedStatement;
-import org.neo4j.jdbc.internal.bolt.exception.Neo4jException;
 import org.neo4j.jdbc.values.Type;
 import org.neo4j.jdbc.values.Value;
 import org.neo4j.jdbc.values.Values;
@@ -96,7 +95,6 @@ class PreparedStatementIT extends IntegrationTestBase {
 				var statement = connection.prepareStatement("CREATE (n:BatchTestSimple {idx: ?})")) {
 			statement.setInt(1, 4711);
 			assertThatExceptionOfType(SQLException.class).isThrownBy(statement::executeUpdate)
-				.withCauseInstanceOf(Neo4jException.class)
 				.withStackTraceContaining("Invalid input '?'");
 		}
 	}
@@ -211,7 +209,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 			try (var statement = connection.prepareStatement("UNWIND range(1, $1) AS x CREATE (n:Test {testId: $2})")) {
 				statement.setInt(1, limit);
 				statement.setString(2, testId);
-				var resultSet = statement.executeQuery();
+				statement.executeQuery();
 			}
 
 			if (commit) {
@@ -294,6 +292,23 @@ class PreparedStatementIT extends IntegrationTestBase {
 		}
 	}
 
+	@Test
+	void metadataWillAvailableOnlyAfterExecute() throws SQLException {
+		try (var connection = getConnection();
+				var stmt = connection.prepareStatement("MATCH(p:Person) WHERE p.date >= ? AND p.date  < ? RETURN p")) {
+
+			var ts = Timestamp.from(Instant.now());
+			stmt.setTimestamp(1, ts);
+			stmt.setTimestamp(2, ts);
+
+			assertThatExceptionOfType(SQLException.class).isThrownBy(stmt::getMetaData)
+				.withMessageContaining("#execute has not been called");
+
+			assertThat(stmt.execute()).isTrue();
+			assertThat(stmt.getMetaData()).isNotNull();
+		}
+	}
+
 	@Nested
 	class SymmetricTypeConversionInPreparedStatementAndResultSet {
 
@@ -304,10 +319,13 @@ class PreparedStatementIT extends IntegrationTestBase {
 			var expectedDate = cal.getTime();
 			return Stream.of(
 					Arguments.of("DATE", expectedDate, null, "RETURN date({year: 2024, month: 2, day: 29}) AS v"),
-					Arguments.of("ZONED TIME (not supported)", expectedDate, SQLException.class,
-							"RETURN time() AS v, 'TIME value cannot be mapped to java.sql.Date' AS m"),
+					Arguments.of("ZONED TIME (not supported)", expectedDate, SQLException.class, """
+							RETURN time() AS v,
+							       "data exception - Cannot coerce TIME '.*' \\(TIME\\) to java\\.sql\\.Date" AS m
+							"""),
 					Arguments.of("LOCAL TIME (not supported)", expectedDate, SQLException.class,
-							"RETURN localtime() AS v, 'LOCAL_TIME value cannot be mapped to java.sql.Date' AS m"),
+							"""
+									RETURN localtime() AS v, "data exception - Cannot coerce TIME '.*' \\(LOCAL_TIME\\) to java\\.sql\\.Date" AS m"""),
 					Arguments.of("ZONED DATETIME", expectedDate, null,
 							"RETURN datetime({year: 2024, month: 2, day: 29}) AS v"),
 					Arguments.of("ZONED DATETIME", expectedDate, null,
@@ -327,7 +345,8 @@ class PreparedStatementIT extends IntegrationTestBase {
 
 				if (exceptionClass != null) {
 					var msg = rs.getString("m");
-					assertThatExceptionOfType(exceptionClass).isThrownBy(() -> rs.getDate("v")).withMessage(msg);
+					assertThatExceptionOfType(exceptionClass).isThrownBy(() -> rs.getDate("v"))
+						.withMessageMatching(msg);
 				}
 				else {
 					var date = rs.getDate("v");
@@ -356,7 +375,8 @@ class PreparedStatementIT extends IntegrationTestBase {
 		static Stream<Arguments> timeMappingShouldWork() {
 			var expectedTime = new Time(23, 59, 59);
 			return Stream.of(Arguments.of("DATE (not supported)", expectedTime, SQLException.class,
-					"RETURN date({year: 2024, month: 2, day: 29}) AS v, 'DATE value cannot be mapped to java.sql.Time' AS m"),
+					"""
+							RETURN date({year: 2024, month: 2, day: 29}) AS v, "data exception - Cannot coerce DATE '2024-02-29' (DATE) to java.sql.Time" AS m"""),
 					Arguments.of("ZONED TIME", expectedTime, null,
 							"RETURN time({hour: 23, minute: 59, second: 59}) AS v"),
 					Arguments.of("ZONED TIME", expectedTime, null,
@@ -414,11 +434,14 @@ class PreparedStatementIT extends IntegrationTestBase {
 			var defaultExpectation = LocalDateTime.of(2024, 2, 29, 23, 59, 59);
 			var expectedTime = Timestamp.valueOf(defaultExpectation);
 			return Stream.of(Arguments.of("DATE (not supported)", null, SQLException.class,
-					"RETURN date({year: 2024, month: 2, day: 29}) AS v, 'DATE value cannot be mapped to java.sql.Timestamp' AS m"),
+					"""
+							RETURN date({year: 2024, month: 2, day: 29}) AS v, "data exception - Cannot coerce DATE '2024-02-29' (DATE) to java.sql.Timestamp" AS m"""),
 					Arguments.of("ZONED TIME (not supported)", expectedTime, SQLException.class,
-							"RETURN time({hour: 23, minute: 59, second: 59}) AS v, 'TIME value cannot be mapped to java.sql.Timestamp' AS m"),
+							"""
+									RETURN time({hour: 23, minute: 59, second: 59}) AS v, "data exception - Cannot coerce TIME '23:59:59Z' (TIME) to java.sql.Timestamp" AS m"""),
 					Arguments.of("LOCAL TIME  (not supported)", expectedTime, SQLException.class,
-							"RETURN localtime({hour: 23, minute: 59, second: 59}) AS v, 'LOCAL_TIME value cannot be mapped to java.sql.Timestamp' AS m"),
+							"""
+									RETURN localtime({hour: 23, minute: 59, second: 59}) AS v, "data exception - Cannot coerce TIME '23:59:59' (LOCAL_TIME) to java.sql.Timestamp" AS m"""),
 					Arguments.of("ZONED DATETIME", expectedTime, null,
 							"RETURN datetime({year: 2024, month: 2, day: 29, hour: 23, minute: 59, second: 59}) AS v"),
 					Arguments.of("ZONED DATETIME", expectedTime, null,
@@ -631,7 +654,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 					}
 
 					assertThatExceptionOfType(SQLException.class).isThrownBy(callable)
-						.withMessage("Invalid length -1 for character stream at index 1");
+						.withMessage("data exception - Invalid length -1 for character stream at index 1");
 
 				}
 				return;
@@ -709,7 +732,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 					}
 
 					assertThatExceptionOfType(SQLException.class).isThrownBy(callable)
-						.withMessage("Invalid length -1 for character stream at index 1");
+						.withMessage("data exception - Invalid length -1 for character stream at index 1");
 
 				}
 				return;
@@ -769,7 +792,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 
 					assertThatExceptionOfType(SQLException.class)
 						.isThrownBy(() -> ps.setNCharacterStream(1, r, lengthUsed))
-						.withMessage("Invalid length -1 for character stream at index 1");
+						.withMessage("data exception - Invalid length -1 for character stream at index 1");
 
 				}
 				return;
@@ -824,7 +847,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 
 					assertThatExceptionOfType(SQLException.class)
 						.isThrownBy(() -> ps.setUnicodeStream(1, r, lengthUsed))
-						.withMessage("Invalid length -1 for character stream at index 1");
+						.withMessage("data exception - Invalid length -1 for character stream at index 1");
 
 				}
 				return;
@@ -889,7 +912,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 					}
 
 					assertThatExceptionOfType(SQLException.class).isThrownBy(callable)
-						.withMessage("Invalid length -1 for binary stream at index 1");
+						.withMessage("data exception - Invalid length -1 for binary stream at index 1");
 
 				}
 				return;
@@ -936,7 +959,7 @@ class PreparedStatementIT extends IntegrationTestBase {
 						assertThat(result.getBinaryStream("n")).isNull();
 						assertThatExceptionOfType(SQLException.class)
 							.isThrownBy(() -> result.getBinaryStream("invalid"))
-							.withMessage("FLOAT value can not be mapped to java.io.InputStream");
+							.withMessage("data exception - Cannot coerce 23.42 (FLOAT) to java.io.InputStream");
 
 						var actual = result.getObject(1, Value.class).asByteArray();
 						if (lengthUsed != null) {

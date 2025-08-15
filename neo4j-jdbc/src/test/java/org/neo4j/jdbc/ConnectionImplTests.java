@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -18,6 +18,7 @@
  */
 package org.neo4j.jdbc;
 
+import java.net.URI;
 import java.sql.ClientInfoStatus;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -30,7 +31,6 @@ import java.sql.Savepoint;
 import java.sql.Statement;
 import java.sql.Wrapper;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -47,21 +47,38 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
+import org.mockito.stubbing.Answer;
+import org.neo4j.bolt.connection.AccessMode;
+import org.neo4j.bolt.connection.AuthInfo;
+import org.neo4j.bolt.connection.AuthToken;
+import org.neo4j.bolt.connection.AuthTokens;
+import org.neo4j.bolt.connection.BoltConnection;
+import org.neo4j.bolt.connection.ResponseHandler;
+import org.neo4j.bolt.connection.TransactionType;
+import org.neo4j.bolt.connection.exception.BoltException;
+import org.neo4j.bolt.connection.message.BeginMessage;
+import org.neo4j.bolt.connection.message.CommitMessage;
+import org.neo4j.bolt.connection.message.Message;
+import org.neo4j.bolt.connection.message.ResetMessage;
+import org.neo4j.bolt.connection.message.RollbackMessage;
+import org.neo4j.bolt.connection.summary.CommitSummary;
+import org.neo4j.bolt.connection.summary.ResetSummary;
+import org.neo4j.bolt.connection.summary.RollbackSummary;
 import org.neo4j.jdbc.ConnectionImpl.TranslatorChain;
-import org.neo4j.jdbc.internal.bolt.AccessMode;
-import org.neo4j.jdbc.internal.bolt.BoltConnection;
-import org.neo4j.jdbc.internal.bolt.TransactionType;
-import org.neo4j.jdbc.internal.bolt.exception.BoltException;
+import org.neo4j.jdbc.authn.spi.Authentication;
+import org.neo4j.jdbc.internal.bolt.BoltAdapters;
 import org.neo4j.jdbc.translator.spi.Translator;
 
+import static com.github.stefanbirkner.systemlambda.SystemLambda.restoreSystemProperties;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -76,7 +93,7 @@ class ConnectionImplTests {
 
 		var connection = makeConnection(mock(BoltConnection.class));
 		assertThatExceptionOfType(SQLException.class).isThrownBy(() -> connection.nativeSQL("M"))
-			.withMessage("No translators available");
+			.withMessage("general processing exception - No translators available");
 	}
 
 	@Test
@@ -110,25 +127,16 @@ class ConnectionImplTests {
 	}
 
 	@Test
-	void shouldPrepareCall() throws SQLException {
-		var connection = makeConnection(mock(BoltConnection.class));
-
-		var statement = connection.prepareCall("RETURN pi()");
-
-		assertThat(statement).isNotNull();
-	}
-
-	@Test
 	void shouldCallTranslator() throws SQLException {
 		var translator = mock(Translator.class);
 		var sql = "SQL";
 		var expectedNativeSql = "nativeSQL";
 		given(translator.translate(eq(sql), any(DatabaseMetaData.class))).willReturn(expectedNativeSql);
-		var connection = new ConnectionImpl(mock(BoltConnection.class), () -> List.of(translator), false, true, false,
-				false, new VoidBookmarkManagerImpl(), Map.of());
+		var connection = new ConnectionImpl(URI.create("jdbc:neo4j://localhost"), Authentication::none,
+				auth -> mock(BoltConnection.class), () -> List.of(translator), false, true, false, false,
+				new NoopBookmarkManagerImpl(), Map.of(), 23, "aBeautifulDatabase", null, List.of());
 
 		var nativeSQL = connection.nativeSQL(sql);
-		nativeSQL = connection.nativeSQL(sql);
 
 		assertThat(nativeSQL).isEqualTo(expectedNativeSql);
 		then(translator).should(times(1)).translate(eq(sql), any(DatabaseMetaData.class));
@@ -154,80 +162,109 @@ class ConnectionImplTests {
 	@ParameterizedTest
 	@ValueSource(booleans = { true, false })
 	void shouldCommitTransactionOnAutoCommitUpdate(boolean autoCommit) throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		var connection = makeConnection(boltConnection);
 		connection.setAutoCommit(!autoCommit);
 		var transactionType = connection.getAutoCommit() ? TransactionType.UNCONSTRAINED : TransactionType.DEFAULT;
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, transactionType,
-				false))
-			.willReturn(CompletableFuture.completedStage(null));
-		given(boltConnection.commit()).willReturn(CompletableFuture.completedStage(null));
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
+		given(boltConnection.writeAndFlush(any(), anyList()))
+			.willAnswer((Answer<CompletableFuture<Void>>) invocation -> {
+				invocation.<ResponseHandler>getArgument(0).onCommitSummary(mock(CommitSummary.class));
+				invocation.<ResponseHandler>getArgument(0).onComplete();
+				return CompletableFuture.completedFuture(null);
+			});
 		var transaction = connection.getTransaction(Map.of());
 
 		connection.setAutoCommit(autoCommit);
 
 		assertThat(Neo4jTransaction.State.COMMITTED.equals(transaction.getState())).isTrue();
-		then(boltConnection).should()
-			.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, transactionType, false);
-		then(boltConnection).should().commit();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+		assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+		assertThat(beginMessage.transactionType()).isEqualTo(transactionType);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> finishMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().authInfo();
+		then(boltConnection).should().writeAndFlush(any(), finishMessagesCaptor.capture());
+		var finishMessages = finishMessagesCaptor.getValue();
+		assertThat(finishMessages.get(0)).isInstanceOf(CommitMessage.class);
 		then(boltConnection).shouldHaveNoMoreInteractions();
 	}
 
 	@ParameterizedTest
 	@ValueSource(booleans = { true, false })
 	void shouldNotCommitTransactionOnSameAutoCommit(boolean autoCommit) throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		var connection = makeConnection(boltConnection);
 		connection.setAutoCommit(autoCommit);
 		var transactionType = connection.getAutoCommit() ? TransactionType.UNCONSTRAINED : TransactionType.DEFAULT;
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, transactionType,
-				false))
-			.willReturn(CompletableFuture.completedStage(null));
+
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
 		var transaction = connection.getTransaction(Map.of());
 
 		connection.setAutoCommit(autoCommit);
 
 		assertThat(Neo4jTransaction.State.NEW.equals(transaction.getState())).isTrue();
-		then(boltConnection).should()
-			.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, transactionType, false);
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().authInfo();
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+		assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+		assertThat(beginMessage.transactionType()).isEqualTo(transactionType);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
 		then(boltConnection).shouldHaveNoMoreInteractions();
 	}
 
 	@ParameterizedTest
 	@ValueSource(booleans = { true, false })
 	void shouldThrowOnManagingAutoCommitTransaction(boolean rollback) throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		var connection = makeConnection(boltConnection);
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE,
-				TransactionType.UNCONSTRAINED, false))
-			.willReturn(CompletableFuture.completedStage(null));
+
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
 		var transaction = connection.getTransaction(Map.of());
 
 		ConnectionMethodRunner methodRunner = rollback ? Connection::rollback : Connection::commit;
 
-		assertThatThrownBy(() -> methodRunner.run(connection)).isExactlyInstanceOf(SQLException.class);
+		assertThatThrownBy(() -> methodRunner.run(connection)).isExactlyInstanceOf(Neo4jException.class);
 
 		assertThat(Neo4jTransaction.State.NEW.equals(transaction.getState())).isTrue();
-		then(boltConnection).should()
-			.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, TransactionType.UNCONSTRAINED, false);
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().authInfo();
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+		assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+		assertThat(beginMessage.transactionType()).isEqualTo(TransactionType.UNCONSTRAINED);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
 		then(boltConnection).shouldHaveNoMoreInteractions();
 	}
 
 	@ParameterizedTest
 	@ValueSource(booleans = { true, false })
 	void shouldManageTransaction(boolean rollback) throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		var connection = makeConnection(boltConnection);
 		connection.setAutoCommit(false);
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE,
-				TransactionType.DEFAULT, false))
-			.willReturn(CompletableFuture.completedStage(null));
-		if (rollback) {
-			given(boltConnection.rollback()).willReturn(CompletableFuture.completedStage(null));
-		}
-		else {
-			given(boltConnection.commit()).willReturn(CompletableFuture.completedStage(null));
-		}
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
+		given(boltConnection.writeAndFlush(any(), anyList()))
+			.willAnswer((Answer<CompletableFuture<Void>>) invocation -> {
+				if (rollback) {
+					invocation.<ResponseHandler>getArgument(0).onRollbackSummary(mock(RollbackSummary.class));
+				}
+				else {
+					invocation.<ResponseHandler>getArgument(0).onCommitSummary(mock(CommitSummary.class));
+				}
+				invocation.<ResponseHandler>getArgument(0).onComplete();
+				return CompletableFuture.completedFuture(null);
+			});
 		var transaction = connection.getTransaction(Map.of());
 
 		if (rollback) {
@@ -239,16 +276,31 @@ class ConnectionImplTests {
 
 		assertThat(transaction.getState()
 			.equals(rollback ? Neo4jTransaction.State.ROLLEDBACK : Neo4jTransaction.State.COMMITTED)).isTrue();
-		then(boltConnection).should()
-			.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, TransactionType.DEFAULT, false);
-		then(boltConnection).should(times(rollback ? 1 : 0)).rollback();
-		then(boltConnection).should(times(rollback ? 0 : 1)).commit();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().authInfo();
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+		assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+		assertThat(beginMessage.transactionType()).isEqualTo(TransactionType.DEFAULT);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> finishMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().writeAndFlush(any(), finishMessagesCaptor.capture());
+		var finishMessages = finishMessagesCaptor.getValue();
+		if (rollback) {
+			assertThat(finishMessages.get(0)).isInstanceOf(RollbackMessage.class);
+		}
+		else {
+			assertThat(finishMessages.get(0)).isInstanceOf(CommitMessage.class);
+		}
 		then(boltConnection).shouldHaveNoMoreInteractions();
 	}
 
 	@Test
-	void shouldNotBeClosedByDefault() throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+	void shouldNotBeClosedByDefault() {
+		var boltConnection = mockBoltConnection();
 		var connection = makeConnection(boltConnection);
 
 		assertThat(connection.isClosed()).isFalse();
@@ -256,7 +308,7 @@ class ConnectionImplTests {
 
 	@Test
 	void shouldClose() throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		given(boltConnection.close()).willReturn(CompletableFuture.completedStage(null));
 		var connection = makeConnection(boltConnection);
 
@@ -269,11 +321,14 @@ class ConnectionImplTests {
 
 	@Test
 	void shouldRollbackOnClose() throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE,
-				TransactionType.UNCONSTRAINED, false))
-			.willReturn(CompletableFuture.completedStage(null));
-		given(boltConnection.rollback()).willReturn(CompletableFuture.completedStage(null));
+		var boltConnection = mockBoltConnection();
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
+		given(boltConnection.writeAndFlush(any(), anyList()))
+			.willAnswer((Answer<CompletableFuture<Void>>) invocation -> {
+				invocation.<ResponseHandler>getArgument(0).onRollbackSummary(mock(RollbackSummary.class));
+				invocation.<ResponseHandler>getArgument(0).onComplete();
+				return CompletableFuture.completedFuture(null);
+			});
 		given(boltConnection.close()).willReturn(CompletableFuture.completedStage(null));
 		var connection = makeConnection(boltConnection);
 		var transaction = connection.getTransaction(Map.of());
@@ -282,9 +337,19 @@ class ConnectionImplTests {
 
 		assertThat(connection.isClosed()).isTrue();
 		assertThat(Neo4jTransaction.State.ROLLEDBACK.equals(transaction.getState())).isTrue();
-		then(boltConnection).should()
-			.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE, TransactionType.UNCONSTRAINED, false);
-		then(boltConnection).should().rollback();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().authInfo();
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+		assertThat(beginMessage.transactionType()).isEqualTo(TransactionType.UNCONSTRAINED);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> finishMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().writeAndFlush(any(), finishMessagesCaptor.capture());
+		var finishMessages = finishMessagesCaptor.getValue();
+		assertThat(finishMessages.get(0)).isInstanceOf(RollbackMessage.class);
 		then(boltConnection).should().close();
 		then(boltConnection).shouldHaveNoMoreInteractions();
 	}
@@ -309,11 +374,9 @@ class ConnectionImplTests {
 	@ValueSource(booleans = { true, false })
 	void shouldPassAccessModeToBoltConnection(boolean readOnly) throws SQLException {
 		// given
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		var accessMode = readOnly ? AccessMode.READ : AccessMode.WRITE;
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), accessMode,
-				TransactionType.UNCONSTRAINED, false))
-			.willReturn(CompletableFuture.completedStage(null));
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
 		var connection = makeConnection(boltConnection);
 		connection.setReadOnly(readOnly);
 
@@ -322,36 +385,48 @@ class ConnectionImplTests {
 
 		// then
 		assertThat(transaction).isNotNull();
-		then(boltConnection).should()
-			.beginTransaction(Collections.emptySet(), Map.of(), accessMode, TransactionType.UNCONSTRAINED, false);
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+		assertThat(beginMessage.accessMode()).isEqualTo(accessMode);
+		assertThat(beginMessage.transactionType()).isEqualTo(TransactionType.UNCONSTRAINED);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
 	}
 
 	@Test
 	void shouldThrowOnUpdatingReadOnlyDuringTransaction() throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
-		given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE,
-				TransactionType.UNCONSTRAINED, false))
-			.willReturn(CompletableFuture.completedStage(null));
+		var boltConnection = mockBoltConnection();
+		given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
 		var connection = makeConnection(boltConnection);
+		@SuppressWarnings("unused")
 		var transaction = connection.getTransaction(Map.of());
 
-		assertThatThrownBy(() -> connection.setReadOnly(true)).isExactlyInstanceOf(SQLException.class);
+		assertThatThrownBy(() -> connection.setReadOnly(true)).isExactlyInstanceOf(Neo4jException.class);
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+		then(boltConnection).should().write(beginMessagesCaptor.capture());
+		var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+		assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+		assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+		assertThat(beginMessage.transactionType()).isEqualTo(TransactionType.UNCONSTRAINED);
+		assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
 	}
 
 	@Test
-	void shouldNotHaveCatalogByDefault() throws SQLException {
+	void catalogShouldBeEqualToDatabasename() throws SQLException {
 		var connection = makeConnection(mock(BoltConnection.class));
 
-		assertThat(connection.getCatalog()).isNull();
+		assertThat(connection.getCatalog()).isEqualTo("aBeautifulDatabase");
 	}
 
 	@Test
-	void shouldIgnoreUpdatingCatalog() throws SQLException {
+	void changingCatalogIsNotSupported() {
 		var connection = makeConnection(mock(BoltConnection.class));
 
-		connection.setCatalog("ignored");
-
-		assertThat(connection.getCatalog()).isNull();
+		assertThatExceptionOfType(SQLException.class).isThrownBy(() -> connection.setCatalog("someCatalog"))
+			.withMessage("Changing the catalog is not implemented");
 	}
 
 	@Test
@@ -394,7 +469,7 @@ class ConnectionImplTests {
 		var connection = makeConnection(mock(BoltConnection.class));
 
 		assertThatThrownBy(() -> connection.prepareStatement("sql", type, ResultSet.CONCUR_READ_ONLY))
-			.isExactlyInstanceOf(SQLException.class);
+			.isExactlyInstanceOf(SQLFeatureNotSupportedException.class);
 	}
 
 	@Test
@@ -403,7 +478,7 @@ class ConnectionImplTests {
 
 		assertThatThrownBy(
 				() -> connection.prepareStatement("sql", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE))
-			.isExactlyInstanceOf(SQLException.class);
+			.isExactlyInstanceOf(SQLFeatureNotSupportedException.class);
 	}
 
 	@Test
@@ -417,30 +492,71 @@ class ConnectionImplTests {
 	void shouldThrowOnValidatingWithNegativeTimeout() {
 		var connection = makeConnection(mock(BoltConnection.class));
 
-		assertThatThrownBy(() -> connection.isValid(-1)).isExactlyInstanceOf(SQLException.class);
+		assertThatThrownBy(() -> connection.isValid(-1)).isExactlyInstanceOf(Neo4jException.class);
 	}
 
 	@ParameterizedTest
 	@MethodSource("getSendResetOnValidatingWithoutActiveTransactionArgs")
 	void shouldSendResetOnValidatingWithoutActiveTransaction(boolean setupClosedTransaction, boolean expectedValid)
 			throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		var connection = makeConnection(boltConnection);
 		if (setupClosedTransaction) {
-			given(boltConnection.beginTransaction(Collections.emptySet(), Map.of(), AccessMode.WRITE,
-					TransactionType.UNCONSTRAINED, false))
-				.willReturn(CompletableFuture.completedStage(null));
-			given(boltConnection.commit()).willReturn(CompletableFuture.completedStage(null));
+			given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
+			given(boltConnection.writeAndFlush(any(), anyList()))
+				.willAnswer((Answer<CompletableFuture<Void>>) invocation -> {
+					invocation.<ResponseHandler>getArgument(0).onCommitSummary(mock(CommitSummary.class));
+					invocation.<ResponseHandler>getArgument(0).onComplete();
+					return CompletableFuture.completedFuture(null);
+				});
 			var transaction = connection.getTransaction(Map.of());
 			transaction.commit();
 		}
-		given(boltConnection.reset(true)).willReturn(expectedValid ? CompletableFuture.completedStage(null)
-				: CompletableFuture.failedFuture(new BoltException("ignored")));
+		given(boltConnection.writeAndFlush(any(), any(ResetMessage.class)))
+			.willAnswer((Answer<CompletableFuture<Void>>) invocation -> {
+				if (expectedValid) {
+					invocation.<ResponseHandler>getArgument(0).onResetSummary(mock(ResetSummary.class));
+					invocation.<ResponseHandler>getArgument(0).onComplete();
+					return CompletableFuture.completedFuture(null);
+				}
+				else {
+					return CompletableFuture.failedFuture(new BoltException("ignored"));
+				}
+			});
 
 		var valid = connection.isValid(0);
 
+		if (setupClosedTransaction) {
+			@SuppressWarnings("unchecked")
+			ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+			then(boltConnection).should().write(beginMessagesCaptor.capture());
+			var beginMessage = (BeginMessage) beginMessagesCaptor.getValue().get(0);
+			assertThat(beginMessage.databaseName().orElse(null)).isEqualTo("aBeautifulDatabase");
+			assertThat(beginMessage.accessMode()).isEqualTo(AccessMode.WRITE);
+			assertThat(beginMessage.transactionType()).isEqualTo(TransactionType.UNCONSTRAINED);
+			assertThat(beginMessage.bookmarks().isEmpty()).isTrue();
+		}
 		assertThat(valid).isEqualTo(expectedValid);
-		then(boltConnection).should().reset(true);
+		then(boltConnection).should().writeAndFlush(any(), any(ResetMessage.class));
+	}
+
+	private static BoltConnection mockBoltConnection() {
+
+		var boltConnection = mock(BoltConnection.class);
+		given(boltConnection.authInfo()).willReturn(CompletableFuture.completedFuture(new AuthInfo() {
+
+			@Override
+			public AuthToken authToken() {
+				return AuthTokens.none(BoltAdapters.getValueFactory());
+			}
+
+			@Override
+			public long authAckMillis() {
+				return 0;
+			}
+		}));
+
+		return boltConnection;
 	}
 
 	static Stream<Arguments> getSendResetOnValidatingWithoutActiveTransactionArgs() {
@@ -499,7 +615,7 @@ class ConnectionImplTests {
 		assertThat(infoException.getFailedProperties().size()).isEqualTo(properties.size());
 		properties.keySet()
 			.stream()
-			.map(key -> (String) key)
+			.map(String.class::cast)
 			.forEach(key -> assertThat(infoException.getFailedProperties().get(key))
 				.isEqualTo(ClientInfoStatus.REASON_UNKNOWN_PROPERTY));
 	}
@@ -537,13 +653,12 @@ class ConnectionImplTests {
 	@ParameterizedTest
 	@ValueSource(booleans = { true, false })
 	void shouldCloseOnAbort(boolean transactionPresent) throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		given(boltConnection.close()).willReturn(CompletableFuture.completedStage(null));
 		var connection = makeConnection(boltConnection);
 		Neo4jTransaction transaction = null;
 		if (transactionPresent) {
-			given(boltConnection.beginTransaction(any(), any(), any(), any(), anyBoolean()))
-				.willReturn(CompletableFuture.completedStage(null));
+			given(boltConnection.write(anyList())).willReturn(CompletableFuture.completedStage(null));
 			transaction = connection.getTransaction(Map.of());
 		}
 
@@ -553,7 +668,13 @@ class ConnectionImplTests {
 		if (transactionPresent) {
 			assertThat(transaction).isNotNull();
 			assertThat(transaction.getState()).isEqualTo(Neo4jTransaction.State.FAILED);
-			then(boltConnection).should().beginTransaction(any(), any(), any(), any(), anyBoolean());
+			@SuppressWarnings("unchecked")
+			ArgumentCaptor<List<Message>> beginMessagesCaptor = ArgumentCaptor.forClass(List.class);
+			then(boltConnection).should().write(beginMessagesCaptor.capture());
+			assertThat(beginMessagesCaptor.getValue().get(0)).isInstanceOf(BeginMessage.class);
+		}
+		if (transactionPresent) {
+			then(boltConnection).should().authInfo();
 		}
 		then(boltConnection).should().close();
 		then(boltConnection).shouldHaveNoMoreInteractions();
@@ -563,12 +684,12 @@ class ConnectionImplTests {
 	@MethodSource("getThrowingMethodExecutorsWhenClosed")
 	void shouldThrowWhenClosed(ConnectionMethodRunner consumer, Class<? extends SQLException> exceptionType)
 			throws SQLException {
-		var boltConnection = mock(BoltConnection.class);
+		var boltConnection = mockBoltConnection();
 		given(boltConnection.close()).willReturn(CompletableFuture.completedStage(null));
 		var connection = makeConnection(boltConnection);
 		connection.close();
 		assertThat(connection.isClosed()).isTrue();
-		assertThatThrownBy(() -> consumer.run(connection)).isExactlyInstanceOf(exceptionType);
+		assertThatThrownBy(() -> consumer.run(connection)).isInstanceOf(exceptionType);
 	}
 
 	static Stream<Arguments> getThrowingMethodExecutorsWhenClosed() {
@@ -608,22 +729,30 @@ class ConnectionImplTests {
 				Arguments.of((ConnectionMethodRunner) Connection::getSchema, SQLException.class));
 	}
 
+	@Test
+	void getTypeMapShouldAlwaysBeEmpty() {
+		var connection = makeConnection(mock(BoltConnection.class));
+		assertThat(connection.getTypeMap()).isEqualTo(Map.of());
+	}
+
 	@ParameterizedTest
 	@MethodSource("getUnsupportedMethodExecutors")
 	void shouldThrowUnsupported(ConnectionMethodRunner consumer, Class<? extends SQLException> exceptionType) {
 		var connection = makeConnection(mock(BoltConnection.class));
-		assertThatThrownBy(() -> consumer.run(connection)).isExactlyInstanceOf(exceptionType);
+		assertThatThrownBy(() -> consumer.run(connection)).isInstanceOf(exceptionType);
 	}
 
 	static Stream<Arguments> getUnsupportedMethodExecutors() {
 		return Stream.of(
 				Arguments.of((ConnectionMethodRunner) connection -> connection
-					.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE), SQLException.class),
-				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareCall("RETURN pi()",
-						ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE), SQLException.class),
-				Arguments.of((ConnectionMethodRunner) Connection::getTypeMap, SQLFeatureNotSupportedException.class),
-				Arguments.of((ConnectionMethodRunner) connection -> connection.setTypeMap(Collections.emptyMap()),
+					.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE),
 						SQLFeatureNotSupportedException.class),
+				Arguments.of(
+						(ConnectionMethodRunner) connection -> connection.prepareCall("RETURN pi()",
+								ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE),
+						SQLFeatureNotSupportedException.class),
+				Arguments.of((ConnectionMethodRunner) connection -> connection.setTypeMap(Map.of("a", Integer.class)),
+						SQLException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection
 					.setHoldability(ResultSet.HOLD_CURSORS_OVER_COMMIT), SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) Connection::setSavepoint, SQLFeatureNotSupportedException.class),
@@ -633,29 +762,30 @@ class ConnectionImplTests {
 						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.releaseSavepoint(mock(Savepoint.class)),
 						SQLFeatureNotSupportedException.class),
-				Arguments
-					.of((ConnectionMethodRunner) connection -> connection.createStatement(ResultSet.TYPE_FORWARD_ONLY,
-							ResultSet.CONCUR_READ_ONLY, ResultSet.HOLD_CURSORS_OVER_COMMIT), SQLException.class),
+				Arguments.of(
+						(ConnectionMethodRunner) connection -> connection.createStatement(ResultSet.TYPE_FORWARD_ONLY,
+								ResultSet.CONCUR_READ_ONLY, ResultSet.HOLD_CURSORS_OVER_COMMIT),
+						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareStatement("ignored",
 						ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, ResultSet.HOLD_CURSORS_OVER_COMMIT),
-						SQLException.class),
+						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareStatement("ignored",
 						ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY,
-						ResultSet.CLOSE_CURSORS_AT_COMMIT), SQLException.class),
+						ResultSet.CLOSE_CURSORS_AT_COMMIT), SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareStatement("ignored",
 						ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE, ResultSet.CLOSE_CURSORS_AT_COMMIT),
-						SQLException.class),
+						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareCall("ignored",
 						ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, ResultSet.HOLD_CURSORS_OVER_COMMIT),
-						SQLException.class),
+						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareCall("ignored",
 						ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY,
-						ResultSet.CLOSE_CURSORS_AT_COMMIT), SQLException.class),
+						ResultSet.CLOSE_CURSORS_AT_COMMIT), SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareCall("ignored",
 						ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE, ResultSet.CLOSE_CURSORS_AT_COMMIT),
-						SQLException.class),
+						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareStatement("ignored",
-						Statement.NO_GENERATED_KEYS), SQLFeatureNotSupportedException.class),
+						Statement.RETURN_GENERATED_KEYS), SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.prepareStatement("ignored", new int[0]),
 						SQLFeatureNotSupportedException.class),
 				Arguments.of(
@@ -665,8 +795,6 @@ class ConnectionImplTests {
 				Arguments.of((ConnectionMethodRunner) Connection::createBlob, SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) Connection::createNClob, SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) Connection::createSQLXML, SQLFeatureNotSupportedException.class),
-				Arguments.of((ConnectionMethodRunner) connection -> connection.createArrayOf("ignored", new String[0]),
-						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.createStruct("ignored", new Object[0]),
 						SQLFeatureNotSupportedException.class),
 				Arguments.of((ConnectionMethodRunner) connection -> connection.setShardingKeyIfValid(null, null, 0),
@@ -678,8 +806,10 @@ class ConnectionImplTests {
 				Arguments.of((ConnectionMethodRunner) connection -> connection.setShardingKey(null),
 						SQLFeatureNotSupportedException.class),
 				// other
-				Arguments.of((ConnectionMethodRunner) connection -> connection
-					.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED), SQLException.class));
+				Arguments.of(
+						(ConnectionMethodRunner) connection -> connection
+							.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED),
+						SQLFeatureNotSupportedException.class));
 	}
 
 	@ParameterizedTest
@@ -712,8 +842,9 @@ class ConnectionImplTests {
 	}
 
 	ConnectionImpl makeConnection(BoltConnection boltConnection) {
-		return new ConnectionImpl(boltConnection, List::of, false, false, true, false, new VoidBookmarkManagerImpl(),
-				Map.of());
+		return new ConnectionImpl(URI.create("jdbc:neo4j://localhost"), Authentication::none, auth -> boltConnection,
+				List::of, false, false, true, false, new NoopBookmarkManagerImpl(), Map.of(), 23, "aBeautifulDatabase",
+				null, List.of());
 
 	}
 
@@ -736,7 +867,9 @@ class ConnectionImplTests {
 	@Test
 	void shouldSetNetworkTimeout() throws SQLException {
 		// given
-		var connection = makeConnection(mock(BoltConnection.class));
+		var boltConnection = mockBoltConnection();
+		given(boltConnection.setReadTimeout(any())).willReturn(CompletableFuture.completedStage(null));
+		var connection = makeConnection(boltConnection);
 
 		// when
 		var timeout = 1000;
@@ -750,7 +883,9 @@ class ConnectionImplTests {
 	// this is not required by JDBC
 	void shouldSetNetworkTimeoutWithNullExecutor() throws SQLException {
 		// given
-		var connection = makeConnection(mock(BoltConnection.class));
+		var boltConnection = mockBoltConnection();
+		given(boltConnection.setReadTimeout(any())).willReturn(CompletableFuture.completedStage(null));
+		var connection = makeConnection(boltConnection);
 
 		// when
 		var timeout = 1000;
@@ -767,8 +902,60 @@ class ConnectionImplTests {
 
 		// when & then
 		assertThatThrownBy(() -> connection.setNetworkTimeout(mock(Executor.class), -1))
-			.isExactlyInstanceOf(SQLException.class);
+			.isExactlyInstanceOf(Neo4jException.class);
 		assertThat(connection.getNetworkTimeout()).isEqualTo(0);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "foo", "n/a" })
+	void getAppShouldWork(String applicationName) throws Exception {
+
+		restoreSystemProperties(() -> {
+			var connection = makeConnection(mock(BoltConnection.class));
+
+			var expected = "";
+			if (!"n/a".equals(applicationName)) {
+				connection.setClientInfo("ApplicationName", applicationName);
+				expected = applicationName + " ";
+			}
+			expected += "Java/1.4 (ms fake -) neo4j-jdbc/" + ProductVersion.getValue();
+
+			System.setProperty("java.version", "1.4");
+			System.setProperty("java.vm.vendor", "ms");
+			System.setProperty("java.vm.name", "fake");
+			System.clearProperty("java.vm.version");
+
+			assertThat(connection.getApp()).isEqualTo(expected);
+		});
+	}
+
+	static Stream<Arguments> shouldEnforceCypher() {
+		var mlQuery = """
+				/*+ NEO4J FORCE_CYPHER */
+				MATCH (:Station { name: 'Denmark Hill' })<-[:CALLS_AT]-(d:Stop)
+					((:Stop)-[:NEXT]->(:Stop)){1,3}
+					(a:Stop)-[:CALLS_AT]->(:Station { name: 'Clapham Junction' })
+				RETURN d.departs AS departureTime, a.arrives AS arrivalTime
+				""";
+
+		return Stream.of(Arguments.of("/*+ NEO4J FORCE_CYPHER */ MATCH (n) RETURN n", true),
+				Arguments.of("MATCH /*+ NEO4J FORCE_CYPHER */ (n) RETURN n", true),
+				Arguments.of("MATCH /*+ NEO4J FORCE_CYPHER */ (n)\nRETURN n", true),
+				Arguments.of("/*+ NEO4J FORCE_CYPHER */ MATCH (n)\nRETURN n", true),
+				Arguments.of("/*+ NEO4J FORCE_CYPHER */\nMATCH (n)\nRETURN n", true),
+				Arguments.of("/*+ NEO4J FORCE_CYPHER */\nMATCH (n:'Movie')\nRETURN n", true),
+				Arguments.of("/*+ NEO4J FORCE_CYPHER */\nMATCH (n:`Movie`)\nRETURN n", true),
+				Arguments.of("MATCH (n:`/*+ NEO4J FORCE_CYPHER */`) RETURN n", false),
+				Arguments.of("MATCH (n) SET n.f = '/*+ NEO4J FORCE_CYPHER */' RETURN n", false),
+				Arguments.of("MATCH (n) SET n.f = '   /*+ NEO4J FORCE_CYPHER */    ' RETURN n", false),
+				Arguments.of("MATCH (n) SET n.f = \"/*+ NEO4J FORCE_CYPHER */\" RETURN n", false),
+				Arguments.of(mlQuery, true));
+	}
+
+	@ParameterizedTest
+	@MethodSource
+	void shouldEnforceCypher(String sql, boolean shouldEnforceCypher) {
+		assertThat(ConnectionImpl.forceCypher(sql)).isEqualTo(shouldEnforceCypher);
 	}
 
 	@FunctionalInterface

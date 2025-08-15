@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -25,11 +25,8 @@ abstract class AbstractObjectValue<V> extends AbstractValue {
 	final V adapted;
 
 	protected AbstractObjectValue(V adapted) {
-		if (adapted == null) {
-			throw new IllegalArgumentException(
-					String.format("Cannot construct %s from null", getClass().getSimpleName()));
-		}
-		this.adapted = adapted;
+		this.adapted = Objects.requireNonNull(adapted,
+				String.format("Cannot construct %s from null", getClass().getSimpleName()));
 	}
 
 	@Override

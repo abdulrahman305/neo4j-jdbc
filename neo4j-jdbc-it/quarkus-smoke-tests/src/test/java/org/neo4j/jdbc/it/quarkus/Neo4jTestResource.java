@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -84,7 +84,8 @@ public final class Neo4jTestResource implements QuarkusTestResourceLifecycleMana
 		}
 
 		return Map.of("quarkus.datasource.jdbc.url",
-				"jdbc:neo4j://%s:%d?enableSQLTranslation=true".formatted("localhost", this.neo4j.getMappedPort(7687)),
+				"jdbc:neo4j://%s:%d?enableSQLTranslation=true".formatted(this.neo4j.getHost(),
+						this.neo4j.getMappedPort(7687)),
 				"quarkus.datasource.username", "neo4j", "quarkus.datasource.password", this.neo4j.getAdminPassword());
 	}
 

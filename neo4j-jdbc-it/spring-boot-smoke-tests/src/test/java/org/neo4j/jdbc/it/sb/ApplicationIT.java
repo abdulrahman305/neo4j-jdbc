@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -21,11 +21,11 @@ package org.neo4j.jdbc.it.sb;
 import java.util.List;
 import java.util.Map;
 
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.actuate.metrics.MetricsEndpoint;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.annotation.Import;
@@ -53,9 +53,12 @@ public class ApplicationIT {
 		var listOfMoviesType = new ParameterizedTypeReference<List<Movie>>() {
 		};
 
+		var stringMapType = new ParameterizedTypeReference<Map<String, String>>() {
+		};
+
 		var moviesResponse = restTemplate.exchange(RequestEntity.get("/movies").build(), listOfMoviesType);
 		assertThat(moviesResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-		Assertions.assertThat(moviesResponse.getBody()).isEmpty();
+		assertThat(moviesResponse.getBody()).isEmpty();
 
 		var title = "Alita: Battle Angel";
 		var movieCreateOrUpdatedResponse = restTemplate
@@ -68,7 +71,40 @@ public class ApplicationIT {
 
 		moviesResponse = restTemplate.exchange(RequestEntity.get("/movies").build(), listOfMoviesType);
 		assertThat(moviesResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-		Assertions.assertThat(moviesResponse.getBody()).containsExactly(new Movie(title));
+		assertThat(moviesResponse.getBody()).containsExactly(new Movie(title));
+
+		var metrics = restTemplate.getForObject("/actuator/metrics/org.neo4j.jdbc.connections",
+				MetricsEndpoint.MetricDescriptor.class);
+		assertThat(metrics.getMeasurements()).hasSize(1);
+		assertThat(metrics.getMeasurements().get(0).getValue()).isGreaterThanOrEqualTo(6.0);
+
+		metrics = restTemplate.getForObject("/actuator/metrics/org.neo4j.jdbc.cached-translations",
+				MetricsEndpoint.MetricDescriptor.class);
+		assertThat(metrics.getMeasurements()).hasSize(1);
+		assertThat(metrics.getMeasurements().get(0).getValue()).isGreaterThanOrEqualTo(2);
+
+		metrics = restTemplate.getForObject("/actuator/metrics/org.neo4j.jdbc.statements",
+				MetricsEndpoint.MetricDescriptor.class);
+		assertThat(metrics.getMeasurements()).hasSize(1);
+		assertThat(metrics.getMeasurements().get(0).getValue()).isZero();
+
+		var response = restTemplate.exchange(RequestEntity.get("/movies?fail=true").build(), stringMapType);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+
+		metrics = restTemplate.getForObject("/actuator/metrics/org.neo4j.jdbc.queries?tag=state:successful",
+				MetricsEndpoint.MetricDescriptor.class);
+		assertThat(metrics.getMeasurements()).hasSize(3);
+		assertThat(metrics.getMeasurements().get(0).getValue()).isEqualTo(5);
+
+		metrics = restTemplate.getForObject("/actuator/metrics/org.neo4j.jdbc.queries?tag=state:failed",
+				MetricsEndpoint.MetricDescriptor.class);
+		assertThat(metrics.getMeasurements()).hasSize(3);
+		assertThat(metrics.getMeasurements().get(0).getValue()).isEqualTo(1);
+
+		metrics = restTemplate.getForObject("/actuator/metrics/org.neo4j.jdbc.queries",
+				MetricsEndpoint.MetricDescriptor.class);
+		assertThat(metrics.getMeasurements()).hasSize(3);
+		assertThat(metrics.getMeasurements().get(0).getValue()).isEqualTo(6);
 	}
 
 }

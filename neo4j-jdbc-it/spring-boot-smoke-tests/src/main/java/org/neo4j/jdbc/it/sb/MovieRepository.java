@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -38,8 +38,13 @@ public class MovieRepository {
 	}
 
 	@Transactional(readOnly = true)
-	public List<Movie> findAll() {
-		return this.jdbcTemplate.query("SELECT * FROM Movie m", (rs, rowNum) -> new Movie(rs.getString("title")));
+	public List<Movie> findAll(boolean fail) {
+		// This is using a small fetch size specifically to test some annotations on spans
+		return this.jdbcTemplate.query(con -> {
+			var stmt = con.prepareStatement(fail ? "asd" : "SELECT title FROM Movie m");
+			stmt.setFetchSize(4);
+			return stmt;
+		}, (rs, rowNum) -> new Movie(rs.getString("title")));
 	}
 
 	public int createOrUpdate(Movie movie) {
@@ -53,6 +58,10 @@ public class MovieRepository {
 		return this.jdbcTemplate
 			.queryForObject("/*+ NEO4J FORCE_CYPHER */ MATCH (p:Movie) WHERE p.title = $1 RETURN p", Node.class, title)
 			.asMap();
+	}
+
+	public void deleteAll() {
+		this.jdbcTemplate.execute("DELETE FROM Movie");
 	}
 
 }

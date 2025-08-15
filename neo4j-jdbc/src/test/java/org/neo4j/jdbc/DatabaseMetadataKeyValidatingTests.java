@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -18,19 +18,29 @@
  */
 package org.neo4j.jdbc;
 
-import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
 class DatabaseMetadataKeyValidatingTests {
 
-	static DatabaseMetadataImpl newDatabaseMetadata() {
-		return new DatabaseMetadataImpl(mock(Connection.class), (s) -> mock(Neo4jTransaction.class), false);
+	static DatabaseMetadataImpl newDatabaseMetadata() throws SQLException {
+		var connection = mock(ConnectionImpl.class);
+		given(connection.getCatalog()).willReturn("someCatalog");
+		try {
+			given(connection.getTransaction(any())).willReturn(mock(Neo4jTransaction.class));
+		}
+		catch (SQLException ex) {
+			throw new RuntimeException(ex);
+		}
+		return new DatabaseMetadataImpl(connection, false, 1000, List.of());
 	}
 
 	@Test
@@ -76,26 +86,6 @@ class DatabaseMetadataKeyValidatingTests {
 			assertThat(rsMetadata.getColumnName(12)).isEqualTo("FK_NAME");
 			assertThat(rsMetadata.getColumnName(13)).isEqualTo("PK_NAME");
 			assertThat(rsMetadata.getColumnName(14)).isEqualTo("DEFERRABILITY");
-		}
-	}
-
-	@Test
-	void getSchemasShouldMatchTheSpec() throws SQLException, ExecutionException, InterruptedException {
-		var databaseMetadata = newDatabaseMetadata();
-		try (var expectedKeysRs = databaseMetadata.getSchemas(null, "public")) {
-			var rsMetadata = expectedKeysRs.getMetaData();
-			assertThat(rsMetadata.getColumnCount()).isEqualTo(2);
-			assertThat(rsMetadata.getColumnName(1)).isEqualTo("TABLE_SCHEM");
-			assertThat(rsMetadata.getColumnName(2)).isEqualTo("TABLE_CATALOG");
-
-		}
-
-		try (var expectedKeysRs = databaseMetadata.getSchemas()) {
-			var rsMetadata = expectedKeysRs.getMetaData();
-			assertThat(rsMetadata.getColumnCount()).isEqualTo(2);
-			assertThat(rsMetadata.getColumnName(1)).isEqualTo("TABLE_SCHEM");
-			assertThat(rsMetadata.getColumnName(2)).isEqualTo("TABLE_CATALOG");
-
 		}
 	}
 

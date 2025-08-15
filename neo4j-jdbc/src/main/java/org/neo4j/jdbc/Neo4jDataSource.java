@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,6 +19,7 @@
 package org.neo4j.jdbc;
 
 import java.io.PrintWriter;
+import java.nio.charset.Charset;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -30,8 +31,10 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
+import org.neo4j.jdbc.tracing.Neo4jTracer;
+
 /**
- * A Neo4j specific extension of {@link DataSource}. It may be referred to for use with
+ * A Neo4j implementation of a {@link DataSource}. It may be referred to for use with
  * {@link #unwrap(Class)} to access specific Neo4j functionality.
  *
  * @author Michael J. Simons
@@ -77,12 +80,16 @@ public final class Neo4jDataSource implements Neo4jDataSourceExtensions {
 	 */
 	private int loginTimeout = 1;
 
+	private String url;
+
 	/**
 	 * A log writer, which we currently don't use.
 	 */
-	private PrintWriter logWriter = new PrintWriter(System.out);
+	private PrintWriter logWriter = new PrintWriter(System.out, false, Charset.defaultCharset());
 
 	private final Properties connectionProperties = new Properties();
+
+	private Neo4jTracer tracer;
 
 	/**
 	 * Creates a new {@link DataSource} which is not yet usable without further
@@ -152,7 +159,34 @@ public final class Neo4jDataSource implements Neo4jDataSourceExtensions {
 		this.transportProtocol = transportProtocol;
 	}
 
+	@Override
+	public void setUrl(String url) {
+		if (url != null && !url.isBlank() && !Neo4jDriver.URL_PATTERN.matcher(url).matches()) {
+			throw new IllegalArgumentException("Invalid URL: " + url);
+		}
+		this.url = url;
+	}
+
+	/**
+	 * Added for compatibility with some frameworks that look for method named
+	 * {@code setDriverClassName}. It's a no-op function in our case.
+	 * @param driverClassName the driver name, only allowed and legal value is
+	 * {@literal "org.neo4j.jdbc.Neo4jDriver"}
+	 */
+	@SuppressWarnings("squid:S2325")
+	public void setDriverClassName(String driverClassName) {
+		if (driverClassName != null && !Neo4jDriver.class.getCanonicalName().equals(driverClassName)) {
+			throw new IllegalArgumentException("Unsupported driver clas name: " + driverClassName);
+		}
+
+		// Ignored anyway, we have only one driver class, which we check above
+	}
+
 	String getUrl() {
+		if (this.url != null && !this.url.isBlank()) {
+			return this.url.trim();
+		}
+
 		return "jdbc:neo4j%s://%s:%d/%s?timeout=%d".formatted(
 				Optional.ofNullable(this.transportProtocol)
 					.map(String::trim)
@@ -169,17 +203,31 @@ public final class Neo4jDataSource implements Neo4jDataSourceExtensions {
 	}
 
 	@Override
+	// The whole point of this method is to provide an _open_ connection
+	@SuppressWarnings("squid:S2095")
 	public Connection getConnection(String username, String password) throws SQLException {
+
 		var newProperties = new Properties();
 		this.connectionProperties.stringPropertyNames()
 			.forEach(k -> newProperties.put(k, this.connectionProperties.getProperty(k)));
 
-		if (username != null && password != null) {
+		if (username != null) {
 			newProperties.setProperty("user", username);
+		}
+		if (password != null) {
 			newProperties.setProperty("password", password);
 		}
 
-		return DriverManager.getConnection(getUrl(), newProperties);
+		var connection = DriverManager.getConnection(getUrl(), newProperties).unwrap(Neo4jConnection.class);
+		if (this.tracer != null) {
+			connection.setTracer(this.tracer);
+		}
+		return connection;
+	}
+
+	@Override
+	public void setTracer(Neo4jTracer tracer) {
+		this.tracer = tracer;
 	}
 
 	@Override
@@ -213,7 +261,7 @@ public final class Neo4jDataSource implements Neo4jDataSourceExtensions {
 			return iface.cast(this);
 		}
 		else {
-			throw new SQLException("This object does not implement the given interface");
+			throw new Neo4jException(Neo4jException.withReason("This object does not implement the given interface"));
 		}
 	}
 

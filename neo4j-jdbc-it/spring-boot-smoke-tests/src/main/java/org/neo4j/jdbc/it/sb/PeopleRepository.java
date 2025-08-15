@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -55,6 +55,8 @@ public class PeopleRepository {
 				(rs, rn) -> rs.getString(1), name);
 	}
 
+	// rowNum is not used, but required by the object mapper interface
+	@SuppressWarnings("squid:S1172")
 	private static Person newPerson(ResultSet rs, int rowNum) throws SQLException {
 		return new Person(rs.getObject("n", Value.class).get("name").asString());
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -29,6 +29,13 @@ import org.neo4j.jdbc.translator.spi.TranslatorFactory;
  * @author Gerrit Meier
  */
 public class Text2CypherTranslatorFactory implements TranslatorFactory {
+
+	/**
+	 * Creates a default instance of this {@link TranslatorFactory}, required for the
+	 * service loader machinery to work.
+	 */
+	public Text2CypherTranslatorFactory() {
+	}
 
 	@Override
 	public Translator create(Map<String, ?> properties) {

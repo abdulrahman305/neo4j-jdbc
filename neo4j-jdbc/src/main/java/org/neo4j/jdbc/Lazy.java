@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -18,7 +18,6 @@
  */
 package org.neo4j.jdbc;
 
-import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
@@ -30,15 +29,15 @@ import java.util.function.Supplier;
  */
 final class Lazy<T> {
 
-	private final Supplier<T> supplier;
+	private final ThrowingSupplier<T> supplier;
 
 	private volatile T resolved;
 
-	static <T> Lazy<T> of(Supplier<T> supplier) {
-		return new Lazy<>(Objects.requireNonNull(supplier));
+	static <T> Lazy<T> of(ThrowingSupplier<T> supplier) {
+		return new Lazy<>(supplier);
 	}
 
-	private Lazy(Supplier<T> supplier) {
+	private Lazy(ThrowingSupplier<T> supplier) {
 		this.supplier = supplier;
 	}
 
@@ -53,12 +52,49 @@ final class Lazy<T> {
 			synchronized (this) {
 				result = this.resolved;
 				if (result == null) {
-					this.resolved = this.supplier.get();
+					try {
+						this.resolved = this.supplier.get();
+					}
+					catch (Exception ex) {
+						if (ex instanceof RuntimeException rt) {
+							throw rt;
+						}
+						throw new RuntimeException(ex);
+					}
 					result = this.resolved;
 				}
 			}
 		}
 		return result;
+	}
+
+	<E extends Throwable> T resolveThrowing(Class<E> type) throws E {
+		try {
+			return this.resolve();
+		}
+		catch (Exception ex) {
+			if (type.isAssignableFrom(ex.getCause().getClass())) {
+				throw type.cast(ex.getCause());
+			}
+			throw ex;
+		}
+	}
+
+	/**
+	 * This method is not synchronized and must be used in a {@code synchronized} block on
+	 * this {@link Lazy}.
+	 * @return true if this instance has been resolved
+	 */
+	boolean isResolved() {
+		return this.resolved != null;
+	}
+
+	/**
+	 * Forgets the resolved value. This method is not synchronized and must be used in a
+	 * {@code synchronized} block on this {@link Lazy}.
+	 */
+	void forget() {
+		this.resolved = null;
 	}
 
 }

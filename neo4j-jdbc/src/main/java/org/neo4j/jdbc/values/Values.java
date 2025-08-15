@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -53,7 +53,10 @@ public final class Values {
 
 	/**
 	 * The value instance of an empty map.
+	 * @deprecated No replacement, please create an empty map the same way if you need a
+	 * static instance.
 	 */
+	@Deprecated(forRemoval = true, since = "6.4.0")
 	public static final Value EmptyMap = value(Collections.emptyMap());
 
 	/**
@@ -70,7 +73,7 @@ public final class Values {
 	 * @param value the object value
 	 * @return the array of values
 	 */
-	@SuppressWarnings("unchecked")
+	@SuppressWarnings({ "squid:S3776", "unchecked" })
 	public static Value value(Object value) {
 		if (value == null) {
 			return NullValue.NULL;

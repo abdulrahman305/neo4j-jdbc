@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -24,7 +24,7 @@
 
 	<groupId>org.neo4j</groupId>
 	<artifactId>neo4j-jdbc-parent</artifactId>
-	<version>6.0.2-SNAPSHOT</version>
+	<version>6.7.4-SNAPSHOT</version>
 
 	<packaging>pom</packaging>
 	<name>Neo4j JDBC Driver</name>
@@ -104,7 +104,9 @@
 
 	<modules>
 		<module>neo4j-jdbc-bom</module>
+		<module>neo4j-jdbc-authn</module>
 		<module>neo4j-jdbc-translator</module>
+		<module>neo4j-jdbc-tracing</module>
 		<module>neo4j-jdbc</module>
 		<module>neo4j-jdbc-it</module>
 		<module>bundles/neo4j-jdbc-bundle</module>
@@ -129,78 +131,110 @@
 
 	<properties>
 		<aggregate.report.dir>neo4j-jdbc-test-results/target/site/jacoco-aggregate/jacoco.xml</aggregate.report.dir>
-		<archunit.version>1.3.0</archunit.version>
-		<artifactsDir>${project.build.directory}</artifactsDir>
-		<asciidoctor-maven-plugin.version>3.1.1</asciidoctor-maven-plugin.version>
+		<archunit.version>1.4.1</archunit.version>
+		<asciidoctor-maven-plugin.version>3.2.0</asciidoctor-maven-plugin.version>
 		<asciidoctorj.pdf.version>2.3.19</asciidoctorj.pdf.version>
 		<asciidoctorj.version>3.0.0</asciidoctorj.version>
-		<assertj.version>3.26.3</assertj.version>
-		<build-helper-maven-plugin.version>3.6.0</build-helper-maven-plugin.version>
-		<checkstyle.version>10.20.2</checkstyle.version>
+		<assertj.version>3.27.3</assertj.version>
+		<awaitility.version>4.3.0</awaitility.version>
+		<build-helper-maven-plugin.version>3.6.1</build-helper-maven-plugin.version>
+		<checkstyle.version>10.26.1</checkstyle.version>
 		<covered-ratio-complexity>0.05</covered-ratio-complexity>
 		<covered-ratio-instructions>0.05</covered-ratio-instructions>
-		<docker-maven-plugin.version>0.45.1</docker-maven-plugin.version>
-		<dotenv-java.version>3.0.2</dotenv-java.version>
+		<cyclonedx-maven-plugin.version>2.9.1</cyclonedx-maven-plugin.version>
+		<cypher-v5-antlr-parser.version>5.26.9</cypher-v5-antlr-parser.version>
+		<docker-maven-plugin.version>0.46.0</docker-maven-plugin.version>
+		<dotenv-java.version>3.2.0</dotenv-java.version>
 		<duplicate-finder-maven-plugin.version>2.0.1</duplicate-finder-maven-plugin.version>
-		<exec-maven-plugin.version>3.5.0</exec-maven-plugin.version>
-		<flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
-		<git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>
+		<exec-maven-plugin.version>3.5.1</exec-maven-plugin.version>
+		<flatten-maven-plugin.version>1.7.1</flatten-maven-plugin.version>
+		<git-commit-id-maven-plugin.version>9.0.2</git-commit-id-maven-plugin.version>
 		<jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
-		<jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
-		<japicmp-maven-plugin.version>0.23.0</japicmp-maven-plugin.version>
+		<jackson.version>2.19.2</jackson.version>
+		<jacoco-maven-plugin.version>0.8.13</jacoco-maven-plugin.version>
+		<japicmp-maven-plugin.version>0.23.1</japicmp-maven-plugin.version>
 		<java.version>17</java.version>
 		<jaxb-api.version>4.0.2</jaxb-api.version>
-		<jdbi3.version>3.47.0</jdbi3.version>
-		<jooq.version>3.19.15</jooq.version>
-		<jreleaser-maven-plugin.version>1.15.0</jreleaser-maven-plugin.version>
-		<junit-jupiter.version>5.11.3</junit-jupiter.version>
-		<kotlin-stdlib-jdk8.version>2.1.0</kotlin-stdlib-jdk8.version>
-		<langchain4j.version>0.36.2</langchain4j.version>
-		<license-maven-plugin.version>4.6</license-maven-plugin.version>
+		<jboss-logging.version>3.6.1.Final</jboss-logging.version>
+		<jdbi3.version>3.49.5</jdbi3.version>
+		<jooq.version>3.19.24</jooq.version>
+		<jreleaser-maven-plugin.version>1.19.0</jreleaser-maven-plugin.version>
+		<junit-jupiter.version>5.13.4</junit-jupiter.version>
+		<keycloak-authz-client.version>26.0.6</keycloak-authz-client.version>
+		<kotlin-stdlib-jdk8.version>2.2.0</kotlin-stdlib-jdk8.version>
+		<langchain4j.version>1.1.0</langchain4j.version>
+		<license-maven-plugin.version>5.0.0</license-maven-plugin.version>
 		<mainArtifactId>neo4j-jdbc</mainArtifactId>
 		<maven-assembly-plugin.version>3.7.1</maven-assembly-plugin.version>
 		<maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
-		<maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
-		<maven-deploy-plugin.version>3.1.3</maven-deploy-plugin.version>
-		<maven-enforcer-plugin.version>3.5.0</maven-enforcer-plugin.version>
-		<maven-failsafe-plugin.version>3.5.2</maven-failsafe-plugin.version>
-		<maven-install-plugin.version>3.1.3</maven-install-plugin.version>
+		<maven-compiler-plugin.version>3.14.0</maven-compiler-plugin.version>
+		<maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
+		<maven-enforcer-plugin.version>3.6.1</maven-enforcer-plugin.version>
+		<maven-failsafe-plugin.version>3.5.3</maven-failsafe-plugin.version>
+		<maven-install-plugin.version>3.1.4</maven-install-plugin.version>
 		<maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
-		<maven-javadoc-plugin.version>3.11.1</maven-javadoc-plugin.version>
+		<maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
 		<maven-release-plugin.version>3.1.1</maven-release-plugin.version>
 		<maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
 		<maven-shade-plugin.version>3.6.0</maven-shade-plugin.version>
 		<maven-source-plugin.version>3.3.1</maven-source-plugin.version>
-		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
+		<maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
 		<maven.compiler.release>${java.version}</maven.compiler.release>
 		<maven.version>3.9.4</maven.version>
-		<mockito.version>5.14.2</mockito.version>
-		<moditect-maven-plugin.version>1.2.2.Final</moditect-maven-plugin.version>
-		<native-maven-plugin.version>0.10.3</native-maven-plugin.version>
-		<neo4j-cypher-dsl.version>2024.2.0</neo4j-cypher-dsl.version>
-		<neo4j-jdbc.previous.version>6.0.1</neo4j-jdbc.previous.version>
+		<micrometer-tracing.version>1.5.2</micrometer-tracing.version>
+		<micrometer.version>1.15.2</micrometer.version>
+		<mockito.version>5.18.0</mockito.version>
+		<moditect-maven-plugin.version>1.3.0.Final</moditect-maven-plugin.version>
+		<native-image-config-transformer.version>0.0.1</native-image-config-transformer.version>
+		<native-maven-plugin.version>0.11.0</native-maven-plugin.version>
+		<neo4j-bolt-connection.version>6.0.2</neo4j-bolt-connection.version>
+		<neo4j-cypher-dsl.version>2024.7.1</neo4j-cypher-dsl.version>
+		<neo4j-jdbc.previous.version>6.7.3</neo4j-jdbc.previous.version>
 		<neo4j.image>neo4j:${neo4j.version}</neo4j.image>
-		<neo4j.version>5.23.0</neo4j.version>
-		<netty.version>4.1.115.Final</netty.version>
-		<openapi-generator-maven-plugin.version>7.10.0</openapi-generator-maven-plugin.version>
-		<opencsv.version>5.9</opencsv.version>
+		<neo4j.version>2025.06</neo4j.version>
+		<netty.version>4.1.123.Final</netty.version>
+		<openapi-generator-maven-plugin.version>7.14.0</openapi-generator-maven-plugin.version>
+		<opencsv.version>5.12.0</opencsv.version>
 		<openpojo.version>0.9.1</openpojo.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-		<quarkus.platform.version>3.17.2</quarkus.platform.version>
+		<quarkus.platform.version>3.24.5</quarkus.platform.version>
 		<skipITs>${skipTests}</skipITs>
 		<skipTests>false</skipTests>
 		<skipUTs>${skipTests}</skipUTs>
-		<slf4j.version>2.0.16</slf4j.version>
-		<sonar-maven-plugin.version>5.0.0.4389</sonar-maven-plugin.version>
+		<slf4j.version>2.0.17</slf4j.version>
+		<sonar-maven-plugin.version>5.1.0.4751</sonar-maven-plugin.version>
 		<sortpom-maven-plugin.version>4.0.0</sortpom-maven-plugin.version>
-		<spring-boot.version>3.4.0</spring-boot.version>
-		<spring-javaformat.version>0.0.43</spring-javaformat.version>
-		<testcontainers.version>1.20.4</testcontainers.version>
+		<spring-boot.version>3.5.4</spring-boot.version>
+		<spring-javaformat.version>0.0.47</spring-javaformat.version>
+		<system-lambda.version>1.2.1</system-lambda.version>
+		<testcontainers-keycloak.version>3.8.0</testcontainers-keycloak.version>
+		<testcontainers.version>1.21.3</testcontainers.version>
 	</properties>
 
 	<dependencyManagement>
 		<dependencies>
+			<dependency>
+				<groupId>com.fasterxml.jackson</groupId>
+				<artifactId>jackson-bom</artifactId>
+				<version>${jackson.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>io.micrometer</groupId>
+				<artifactId>micrometer-bom</artifactId>
+				<version>${micrometer.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>io.micrometer</groupId>
+				<artifactId>micrometer-tracing-bom</artifactId>
+				<version>${micrometer-tracing.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
 			<dependency>
 				<groupId>io.netty</groupId>
 				<artifactId>netty-bom</artifactId>
@@ -230,6 +264,13 @@
 				<scope>import</scope>
 			</dependency>
 			<dependency>
+				<groupId>org.neo4j.bolt</groupId>
+				<artifactId>neo4j-bolt-connection-bom</artifactId>
+				<version>${neo4j-bolt-connection.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
 				<groupId>org.slf4j</groupId>
 				<artifactId>slf4j-bom</artifactId>
 				<version>${slf4j.version}</version>
@@ -242,6 +283,16 @@
 				<version>${testcontainers.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>com.github.dasniko</groupId>
+				<artifactId>testcontainers-keycloak</artifactId>
+				<version>${testcontainers-keycloak.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.github.stefanbirkner</groupId>
+				<artifactId>system-lambda</artifactId>
+				<version>${system-lambda.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>com.opencsv</groupId>
@@ -264,6 +315,13 @@
 				<version>${jaxb-api.version}</version>
 			</dependency>
 			<dependency>
+				<!-- We of course don't use it directly, it's just that opencsv which we use for testing brings it in,
+				and they don't care if it doesn't converge with their dependencies…) -->
+				<groupId>org.apache.commons</groupId>
+				<artifactId>commons-lang3</artifactId>
+				<version>3.18.0</version>
+			</dependency>
+			<dependency>
 				<groupId>org.asciidoctor</groupId>
 				<artifactId>asciidoctorj</artifactId>
 				<version>${asciidoctorj.version}</version>
@@ -274,9 +332,29 @@
 				<version>${assertj.version}</version>
 			</dependency>
 			<dependency>
+				<groupId>org.awaitility</groupId>
+				<artifactId>awaitility</artifactId>
+				<version>${awaitility.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.jboss.logging</groupId>
+				<artifactId>jboss-logging</artifactId>
+				<version>${jboss-logging.version}</version>
+			</dependency>
+			<dependency>
 				<groupId>org.jooq</groupId>
 				<artifactId>jooq</artifactId>
 				<version>${jooq.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.keycloak</groupId>
+				<artifactId>keycloak-authz-client</artifactId>
+				<version>${keycloak-authz-client.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.neo4j</groupId>
+				<artifactId>cypher-v5-antlr-parser</artifactId>
+				<version>${cypher-v5-antlr-parser.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>org.slf4j</groupId>
@@ -306,9 +384,9 @@
 					<configuration>
 						<licenseSets>
 							<licenseSet>
-								<header>etc/license.tpl</header>
+								<header>${maven.multiModuleProjectDirectory}/etc/license.tpl</header>
 								<properties>
-									<year>2024</year>
+									<year>2025</year>
 								</properties>
 								<includes>
 									<include>**</include>
@@ -321,6 +399,7 @@
 									<exclude>**/*.script</exclude>
 									<exclude>**/*.tpl</exclude>
 									<exclude>**/.env</exclude>
+									<exclude>**/.snyk</exclude>
 									<exclude>**/org.mockito.plugins.MockMaker</exclude>
 									<exclude>LICENSE.txt</exclude>
 									<exclude>**/README</exclude>
@@ -375,6 +454,11 @@
 								<type>LICENSE_NAME</type>
 								<rule>APPROVE</rule>
 								<value>MIT License</value>
+							</dependencyPolicy>
+							<dependencyPolicy>
+								<type>LICENSE_NAME</type>
+								<rule>APPROVE</rule>
+								<value>MIT</value>
 							</dependencyPolicy>
 							<!-- Testing only -->
 							<dependencyPolicy>
@@ -621,6 +705,13 @@
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-shade-plugin</artifactId>
 					<version>${maven-shade-plugin.version}</version>
+					<dependencies>
+						<dependency>
+							<groupId>eu.michael-simons.maven</groupId>
+							<artifactId>native-image-config-transformer</artifactId>
+							<version>${native-image-config-transformer.version}</version>
+						</dependency>
+					</dependencies>
 				</plugin>
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
@@ -660,6 +751,7 @@
 								<executable>bin/prepare-release.sh</executable>
 								<arguments>
 									<argument>${project.version}</argument>
+									<!--suppress MavenModelInspection -->
 									<argument>${isDryRun}</argument>
 								</arguments>
 							</configuration>
@@ -739,6 +831,10 @@
 						</newVersion>
 						<parameter>
 							<ignoreMissingOldVersion>true</ignoreMissingOldVersion>
+							<ignoreMissingClassesByRegularExpressions>
+								<!-- Prior to shared Bolt, have been internal anyway, see below. -->
+								<ignoreMissingClassesByRegularExpression>org.neo4j.jdbc.internal.bolt.response.*</ignoreMissingClassesByRegularExpression>
+							</ignoreMissingClassesByRegularExpressions>
 							<breakBuildBasedOnSemanticVersioning>true</breakBuildBasedOnSemanticVersioning>
 							<overrideCompatibilityChangeParameters>
 								<overrideCompatibilityChangeParameter>
@@ -749,6 +845,14 @@
 									<semanticVersionLevel>MINOR</semanticVersionLevel>
 								</overrideCompatibilityChangeParameter>
 							</overrideCompatibilityChangeParameters>
+							<excludes>
+								<!-- This is not public API -->
+								<exclude>org.neo4j.jdbc.internal.bolt</exclude>
+								<!-- This is not even a public interface -->
+								<exclude>org.neo4j.jdbc.Neo4jTransaction</exclude>
+								<!-- This is shady stuff -->
+								<exclude>org.neo4j.jdbc.translator.sparkcleaner.internal.shaded</exclude>
+							</excludes>
 						</parameter>
 					</configuration>
 					<executions>
@@ -759,6 +863,25 @@
 							<phase>package</phase>
 						</execution>
 					</executions>
+				</plugin>
+				<plugin>
+					<groupId>org.cyclonedx</groupId>
+					<artifactId>cyclonedx-maven-plugin</artifactId>
+					<version>${cyclonedx-maven-plugin.version}</version>
+					<configuration>
+						<skipNotDeployed>true</skipNotDeployed>
+						<classifier>sbom-cyclonedx</classifier>
+					</configuration>
+				</plugin>
+				<plugin>
+					<groupId>org.graalvm.buildtools</groupId>
+					<artifactId>native-maven-plugin</artifactId>
+					<version>${native-maven-plugin.version}</version>
+					<configuration>
+						<metadataRepository>
+							<enabled>true</enabled>
+						</metadataRepository>
+					</configuration>
 				</plugin>
 			</plugins>
 		</pluginManagement>
@@ -884,6 +1007,18 @@
 				</executions>
 			</plugin>
 			<plugin>
+				<groupId>org.cyclonedx</groupId>
+				<artifactId>cyclonedx-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<goals>
+							<goal>makeAggregateBom</goal>
+						</goals>
+						<phase>package</phase>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
 				<groupId>org.codehaus.mojo</groupId>
 				<artifactId>exec-maven-plugin</artifactId>
 				<inherited>false</inherited>
@@ -918,6 +1053,7 @@
 					<releaseProfiles>release</releaseProfiles>
 					<tagNameFormat>@{project.version}</tagNameFormat>
 					<goals>deploy</goals>
+					<!--suppress MavenModelInspection -->
 					<arguments>-Drelease -Dgpg.skip=${skipSigning} -DskipTests=${skipTestsDuringRelease} -DisDryRun=${dryRun} -Dsort.skip</arguments>
 					<preparationGoals>clean exec:exec@prepare-release verify</preparationGoals>
 					<completionGoals>compile exec:exec@release-prepared</completionGoals>
@@ -1064,6 +1200,14 @@
 								</artifacts>
 							</full-bundle>
 						</distributions>
+						<announce>
+							<webhooks>
+								<slack>
+									<active>RELEASE</active>
+									<structuredMessage>true</structuredMessage>
+								</slack>
+							</webhooks>
+						</announce>
 					</jreleaser>
 				</configuration>
 			</plugin>
@@ -1078,7 +1222,7 @@
 			According to https://github.com/sonatype/nexus-maven-plugins/tree/master/staging/maven-plugin
 			skipNexusStagingDeployMojo may not be set to true in the last reactor module. Because we don't
 			want to deploy our last module, nor a dummy module, we simply omit the relevant modules when
-			a deploy is in progress.
+			a deployment is in progress.
 			-->
 			<activation>
 				<property>
@@ -1122,6 +1266,7 @@
 			<properties>
 				<asciidoctor.skip>true</asciidoctor.skip>
 				<checkstyle.skip>true</checkstyle.skip>
+				<cyclonedx.skip>true</cyclonedx.skip>
 				<docker.skip>true</docker.skip>
 				<invoker.skip>true</invoker.skip>
 				<jacoco.skip>true</jacoco.skip>
@@ -1134,6 +1279,56 @@
 				<sort.skip>true</sort.skip>
 				<spring-javaformat.skip>true</spring-javaformat.skip>
 			</properties>
+		</profile>
+		<profile>
+			<id>deploy_to_central</id>
+			<activation>
+				<property>
+					<name>deploy_to_central</name>
+				</property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.jreleaser</groupId>
+						<artifactId>jreleaser-maven-plugin</artifactId>
+						<configuration combine.self="append">
+							<skip>false</skip>
+							<jreleaser>
+								<project>
+									<!-- Setting this explicitly to the JReleaser env variables spares us from checking out the tag. -->
+									<!--suppress MavenModelInspection -->
+									<version>${env.JRELEASER_PROJECT_VERSION}</version>
+								</project>
+								<signing>
+									<active>ALWAYS</active>
+									<mode>COMMAND</mode>
+									<command>
+										<homeDir>~/.gnupg</homeDir>
+									</command>
+								</signing>
+								<deploy>
+									<maven>
+										<mavenCentral>
+											<neo4j_jdbc>
+												<active>ALWAYS</active>
+												<url>https://central.sonatype.com/api/v1/publisher</url>
+												<namespace>org.neo4j</namespace>
+												<verifyPom>false</verifyPom>
+												<applyMavenCentralRules>true</applyMavenCentralRules>
+												<stagingRepositories>
+													<stagingRepository>${project.build.directory}/artifacts</stagingRepository>
+												</stagingRepositories>
+												<maxRetries>1000</maxRetries>
+											</neo4j_jdbc>
+										</mavenCentral>
+									</maven>
+								</deploy>
+							</jreleaser>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
 		</profile>
 	</profiles>
 </project>

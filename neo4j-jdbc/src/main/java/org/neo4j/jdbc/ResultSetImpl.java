@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -23,6 +23,7 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.math.BigDecimal;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.sql.Array;
@@ -42,21 +43,37 @@ import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.Calendar;
+import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
-import org.neo4j.jdbc.internal.bolt.response.PullResponse;
-import org.neo4j.jdbc.internal.bolt.response.RunResponse;
+import org.neo4j.jdbc.Neo4jException.GQLError;
+import org.neo4j.jdbc.Neo4jTransaction.PullResponse;
+import org.neo4j.jdbc.Neo4jTransaction.RunResponse;
+import org.neo4j.jdbc.events.Neo4jEvent;
+import org.neo4j.jdbc.events.ResultSetListener;
+import org.neo4j.jdbc.events.ResultSetListener.IterationDoneEvent;
+import org.neo4j.jdbc.events.ResultSetListener.IterationStartedEvent;
 import org.neo4j.jdbc.values.Record;
 import org.neo4j.jdbc.values.Type;
 import org.neo4j.jdbc.values.UncoercibleException;
 import org.neo4j.jdbc.values.Value;
 
-final class ResultSetImpl implements ResultSet {
+import static org.neo4j.jdbc.Neo4jException.withReason;
+
+final class ResultSetImpl implements Neo4jResultSet {
+
+	private static final Logger LOGGER = Logger.getLogger("org.neo4j.jdbc.result-set");
 
 	/**
 	 * A constant for the only holdability we support.
@@ -77,6 +94,8 @@ final class ResultSetImpl implements ResultSet {
 	 * A constant for the only fetch direction we support.
 	 */
 	static final int SUPPORTED_FETCH_DIRECTION = ResultSet.FETCH_FORWARD;
+
+	static final EnumSet<Type> NO_TO_STRING_SUPPORT = EnumSet.of(Type.NODE, Type.RELATIONSHIP, Type.PATH);
 
 	private final StatementImpl statement;
 
@@ -100,6 +119,8 @@ final class ResultSetImpl implements ResultSet {
 
 	private Record currentRecord;
 
+	private final AtomicInteger currentRow = new AtomicInteger(0);
+
 	private Value value;
 
 	private boolean closed;
@@ -111,6 +132,12 @@ final class ResultSetImpl implements ResultSet {
 	private final AtomicBoolean last = new AtomicBoolean(false);
 
 	private final AtomicBoolean afterLast = new AtomicBoolean(false);
+
+	private final Set<ResultSetListener> listeners = new HashSet<>();
+
+	private boolean openedEventFired;
+
+	private boolean closedEventFired;
 
 	ResultSetImpl(StatementImpl statement, Neo4jTransaction transaction, RunResponse runResponse,
 			PullResponse batchPullResponse, int fetchSize, int maxRowLimit, int maxFieldSize) {
@@ -128,8 +155,18 @@ final class ResultSetImpl implements ResultSet {
 	}
 
 	@Override
+	public void addListener(ResultSetListener resultSetListener) {
+		this.listeners.add(Objects.requireNonNull(resultSetListener));
+	}
+
+	@Override
 	public boolean next() throws SQLException {
-		this.beforeFirst.compareAndSet(true, false);
+		LOGGER.log(Level.FINER, () -> "next");
+		if (this.beforeFirst.compareAndSet(true, false) && !this.openedEventFired) {
+			Events.notify(this.listeners, listener -> listener
+				.onIterationStarted(new IterationStartedEvent(Long.toString(System.identityHashCode(this)))));
+			this.openedEventFired = true;
+		}
 		var result = next0();
 		if (result) {
 			if (!this.first.compareAndSet(null, true)) {
@@ -140,25 +177,32 @@ final class ResultSetImpl implements ResultSet {
 		else {
 			this.first.compareAndSet(true, false);
 			this.last.compareAndSet(true, false);
-			this.afterLast.compareAndSet(false, true);
+			if (this.afterLast.compareAndSet(false, true) && this.openedEventFired && !this.closedEventFired) {
+				Events.notify(this.listeners, listener -> listener
+					.onIterationDone(new IterationDoneEvent(Long.toString(System.identityHashCode(this)), true)));
+				this.closedEventFired = true;
+			}
 		}
 		return result;
 	}
 
 	private boolean next0() throws SQLException {
 		if (this.closed) {
-			throw new SQLException("This result set is closed");
+			throw new Neo4jException(withReason("This result set is closed"));
 		}
 		if (this.remainingRowAllowance == 0) {
 			return false;
 		}
 		if (this.recordsBatchIterator.hasNext()) {
 			this.currentRecord = this.recordsBatchIterator.next();
+			this.currentRow.incrementAndGet();
 			decrementRemainingRowAllowance();
 			return true;
 		}
 		if (this.batchPullResponse.hasMore()) {
 			this.batchPullResponse = this.transaction.pull(this.runResponse, calculateFetchSize());
+			Events.notify(this.listeners, listener -> listener.on(new Neo4jEvent(Neo4jEvent.Type.PULLED_NEXT_BATCH,
+					Map.of("source", this.getClass(), "id", Long.toString(System.identityHashCode(this))))));
 			this.recordsBatchIterator = this.batchPullResponse.records().iterator();
 			return next();
 		}
@@ -168,11 +212,17 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public void close() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Closing");
 		if (this.closed) {
 			return;
 		}
 		if (this.transaction.isAutoCommit() && this.transaction.isRunnable()) {
 			this.transaction.commit();
+		}
+		if (this.openedEventFired && !this.closedEventFired) {
+			Events.notify(this.listeners, listener -> listener.onIterationDone(
+					new IterationDoneEvent(Long.toString(System.identityHashCode(this)), this.isAfterLast())));
+			this.closedEventFired = true;
 		}
 		this.closed = true;
 		if (this.statement.isCloseOnCompletion()) {
@@ -182,81 +232,104 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public boolean wasNull() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Getting was null state");
 		assertIsOpen();
 		if (this.value == null) {
-			throw new SQLException("No column has been read prior to this call");
+			throw new Neo4jException(withReason("No column has been read prior to this call"));
 		}
 		return Type.NULL.isTypeOf(this.value);
 	}
 
+	static void logGet(String type, int columnIndex) {
+		LOGGER.log(Level.FINEST, () -> "Getting %s at %d".formatted(type, columnIndex));
+	}
+
+	static void logGet(String type, String columnLabel) {
+		LOGGER.log(Level.FINEST, () -> "Getting %s at `%s`".formatted(type, columnLabel));
+	}
+
 	@Override
 	public String getString(int columnIndex) throws SQLException {
+		logGet("String", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> mapToString(value, this.maxFieldSize));
 	}
 
 	@Override
 	public boolean getBoolean(int columnIndex) throws SQLException {
+		logGet("Boolean", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToBoolean);
 	}
 
 	@Override
 	public byte getByte(int columnIndex) throws SQLException {
+		logGet("Byte", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToByte);
 	}
 
 	@Override
 	public short getShort(int columnIndex) throws SQLException {
+		logGet("Short", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToShort);
 	}
 
 	@Override
 	public int getInt(int columnIndex) throws SQLException {
+		logGet("Int", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToInteger);
 	}
 
 	@Override
 	public long getLong(int columnIndex) throws SQLException {
+		logGet("Int", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToLong);
 	}
 
 	@Override
 	public float getFloat(int columnIndex) throws SQLException {
+		logGet("Int", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToFloat);
 	}
 
 	@Override
 	public double getDouble(int columnIndex) throws SQLException {
+		logGet("Int", columnIndex);
 		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToDouble);
 	}
 
 	@Override
 	@SuppressWarnings("deprecation")
 	public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {
+		LOGGER.log(Level.FINEST, () -> "Getting %s at %d with scale %d".formatted("BigDecimal", columnIndex, scale));
 		return getValueByColumnIndex(columnIndex, v -> mapToBigDecimal(v, scale));
 	}
 
 	@Override
 	public byte[] getBytes(int columnIndex) throws SQLException {
+		logGet("Bytes", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> mapToBytes(value, this.maxFieldSize));
 	}
 
 	@Override
 	public Date getDate(int columnIndex) throws SQLException {
+		logGet("Date", columnIndex);
 		return getValueByColumnIndex(columnIndex, Neo4jConversions::asDate);
 	}
 
 	@Override
 	public Time getTime(int columnIndex) throws SQLException {
+		logGet("Time", columnIndex);
 		return getValueByColumnIndex(columnIndex, Neo4jConversions::asTime);
 	}
 
 	@Override
 	public Timestamp getTimestamp(int columnIndex) throws SQLException {
+		logGet("Timestamp", columnIndex);
 		return getValueByColumnIndex(columnIndex, Neo4jConversions::asTimestamp);
 	}
 
 	@Override
 	public InputStream getAsciiStream(int columnIndex) throws SQLException {
+		logGet("AsciiStream", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> mapToAsciiStream(value, this.maxFieldSize));
 	}
 
@@ -268,77 +341,92 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public InputStream getBinaryStream(int columnIndex) throws SQLException {
+		logGet("UnicodeStream", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> mapToBinaryStream(value, this.maxFieldSize));
 	}
 
 	@Override
 	public String getString(String columnLabel) throws SQLException {
+		logGet("String", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> mapToString(value, this.maxFieldSize));
 	}
 
 	@Override
 	public boolean getBoolean(String columnLabel) throws SQLException {
+		logGet("Boolean", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToBoolean);
 	}
 
 	@Override
 	public byte getByte(String columnLabel) throws SQLException {
+		logGet("Byte", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToByte);
 	}
 
 	@Override
 	public short getShort(String columnLabel) throws SQLException {
+		logGet("Short", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToShort);
 	}
 
 	@Override
 	public int getInt(String columnLabel) throws SQLException {
+		logGet("Int", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToInteger);
 	}
 
 	@Override
 	public long getLong(String columnLabel) throws SQLException {
+		logGet("Long", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToLong);
 	}
 
 	@Override
 	public float getFloat(String columnLabel) throws SQLException {
+		logGet("Float", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToFloat);
 	}
 
 	@Override
 	public double getDouble(String columnLabel) throws SQLException {
+		logGet("Double", columnLabel);
 		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToDouble);
 	}
 
 	@Override
 	@SuppressWarnings("deprecation")
 	public BigDecimal getBigDecimal(String columnLabel, int scale) throws SQLException {
+		LOGGER.log(Level.FINEST, () -> "Getting %s at `%s` with scale %d".formatted("BigDecimal", columnLabel, scale));
 		return getValueByColumnLabel(columnLabel, v -> mapToBigDecimal(v, scale));
 	}
 
 	@Override
 	public byte[] getBytes(String columnLabel) throws SQLException {
+		logGet("Bytes", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> mapToBytes(value, this.maxFieldSize));
 	}
 
 	@Override
 	public Date getDate(String columnLabel) throws SQLException {
+		logGet("Date", columnLabel);
 		return getValueByColumnLabel(columnLabel, Neo4jConversions::asDate);
 	}
 
 	@Override
 	public Time getTime(String columnLabel) throws SQLException {
+		logGet("Time", columnLabel);
 		return getValueByColumnLabel(columnLabel, Neo4jConversions::asTime);
 	}
 
 	@Override
 	public Timestamp getTimestamp(String columnLabel) throws SQLException {
+		logGet("Timestamp", columnLabel);
 		return getValueByColumnLabel(columnLabel, Neo4jConversions::asTimestamp);
 	}
 
 	@Override
 	public InputStream getAsciiStream(String columnLabel) throws SQLException {
+		logGet("AsciiStream", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> mapToAsciiStream(value, this.maxFieldSize));
 	}
 
@@ -350,6 +438,7 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public InputStream getBinaryStream(String columnLabel) throws SQLException {
+		logGet("BinaryStream", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> mapToBinaryStream(value, this.maxFieldSize));
 	}
 
@@ -370,140 +459,192 @@ final class ResultSetImpl implements ResultSet {
 	}
 
 	@Override
-	public ResultSetMetaData getMetaData() {
-		return new ResultSetMetaDataImpl(this.keys, this.firstRecord);
+	public ResultSetMetaData getMetaData() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Getting meta data");
+		var connection = this.statement.getConnection();
+		return new ResultSetMetaDataImpl(connection.getSchema(), connection.getCatalog(), this.keys, this.firstRecord);
 	}
 
 	@Override
 	public Object getObject(int columnIndex) throws SQLException {
+		logGet("Object", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> mapToObject(value, this.maxFieldSize));
 	}
 
 	@Override
 	public Object getObject(String columnLabel) throws SQLException {
+		logGet("Object", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> mapToObject(value, this.maxFieldSize));
 	}
 
 	@Override
 	public int findColumn(String columnLabel) throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Finding column with label `%s`".formatted(columnLabel));
 		assertIsOpen();
 		var index = this.keys.indexOf(columnLabel);
 		if (index == -1) {
-			throw new SQLException("No such column is present");
+			throw new Neo4jException(GQLError.$22N63.withTemplatedMessage(columnLabel));
 		}
 		return ++index;
 	}
 
 	@Override
 	public Reader getCharacterStream(int columnIndex) throws SQLException {
+		logGet("CharacterStream", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> mapToReader(value, this.maxFieldSize));
 	}
 
 	@Override
 	public Reader getCharacterStream(String columnLabel) throws SQLException {
+		logGet("CharacterStream", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> mapToReader(value, this.maxFieldSize));
 	}
 
 	@Override
 	public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
+		logGet("BigDecimal", columnIndex);
 		return getValueByColumnIndex(columnIndex, v -> mapToBigDecimal(v, null));
 	}
 
 	@Override
 	public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
+		logGet("BigDecimal", columnLabel);
 		return getValueByColumnLabel(columnLabel, v -> mapToBigDecimal(v, null));
 	}
 
 	@Override
 	public boolean isBeforeFirst() {
+		LOGGER.log(Level.FINER, () -> "Getting before first state");
 		return this.beforeFirst.get();
 	}
 
 	@Override
 	public boolean isAfterLast() {
+		LOGGER.log(Level.FINER, () -> "Getting after last state");
 		return this.afterLast.get();
 	}
 
 	@Override
 	public boolean isFirst() {
+		LOGGER.log(Level.FINER, () -> "Getting first state");
 		return Boolean.TRUE.equals(this.first.get());
 	}
 
 	@Override
 	public boolean isLast() {
+		LOGGER.log(Level.FINER, () -> "Getting last state");
 		return this.last.get();
 	}
 
 	@Override
 	public void beforeFirst() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		LOGGER.log(Level.FINER, () -> "Moving before first");
+		if (this.beforeFirst.compareAndSet(false, false)) {
+			throw new SQLFeatureNotSupportedException(
+					"This result set is of type TYPE_FORWARD_ONLY (%d) and does not support beforeFirst after it has been iterated"
+						.formatted(SUPPORTED_TYPE));
+		}
 	}
 
+	@SuppressWarnings("StatementWithEmptyBody")
 	@Override
 	public void afterLast() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		LOGGER.log(Level.FINER, () -> "Moving after first");
+		while (this.next()) {
+			// Discard everything
+		}
 	}
 
 	@Override
 	public boolean first() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		LOGGER.log(Level.FINER, () -> "Moving to first");
+		if (this.beforeFirst.compareAndSet(false, false)) {
+			throw new SQLFeatureNotSupportedException(
+					"This result set is of type TYPE_FORWARD_ONLY (%d) and does not support first after it has been iterated"
+						.formatted(SUPPORTED_TYPE));
+		}
+		return next();
 	}
 
 	@Override
 	public boolean last() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		LOGGER.log(Level.FINER, () -> "Moving to last");
+		if (this.afterLast.compareAndSet(true, true)) {
+			throw new SQLFeatureNotSupportedException(
+					"This result set is of type TYPE_FORWARD_ONLY (%d) and does not support last after it has been fully iterated"
+						.formatted(SUPPORTED_TYPE));
+		}
+		var lastRecord = this.currentRecord;
+		while (next()) {
+			lastRecord = this.currentRecord;
+		}
+		this.currentRecord = lastRecord;
+		return true;
 	}
 
 	@Override
-	public int getRow() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+	public int getRow() {
+		LOGGER.log(Level.FINER, () -> "Getting row");
+		return this.currentRow.get();
 	}
 
 	@Override
 	public boolean absolute(int row) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException(
+				"This result set is of type TYPE_FORWARD_ONLY (%d) and does not support absolute scrolling"
+					.formatted(SUPPORTED_TYPE));
 	}
 
 	@Override
 	public boolean relative(int rows) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException(
+				"This result set is of type TYPE_FORWARD_ONLY (%d) and does not support relative scrolling"
+					.formatted(SUPPORTED_TYPE));
 	}
 
 	@Override
 	public boolean previous() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException(
+				"This result set is of type TYPE_FORWARD_ONLY (%d) and does not support previous scrolling"
+					.formatted(SUPPORTED_TYPE));
 	}
 
 	@Override
 	public void setFetchDirection(int direction) throws SQLException {
+		LOGGER.log(Level.WARNING, () -> "Setting fetch direction to %d (ignored)".formatted(direction));
 		assertIsOpen();
 		if (direction != SUPPORTED_FETCH_DIRECTION) {
-			throw new SQLException("Only forward fetching is supported");
+			throw new SQLFeatureNotSupportedException("Only forward fetching is supported");
 		}
 	}
 
 	@Override
 	public int getFetchDirection() {
+		LOGGER.log(Level.FINER, () -> "Getting fetch direction");
 		return SUPPORTED_FETCH_DIRECTION;
 	}
 
 	@Override
 	public void setFetchSize(int rows) {
+		LOGGER.log(Level.FINER, () -> "Setting fetch size to %d".formatted(rows));
 		this.fetchSize = (rows > 0) ? rows : Neo4jStatement.DEFAULT_FETCH_SIZE;
 	}
 
 	@Override
 	public int getFetchSize() {
+		LOGGER.log(Level.FINER, () -> "Getting fetch size");
 		return this.fetchSize;
 	}
 
 	@Override
 	public int getType() {
+		LOGGER.log(Level.FINER, () -> "Getting type");
 		return SUPPORTED_TYPE;
 	}
 
 	@Override
 	public int getConcurrency() {
+		LOGGER.log(Level.FINER, () -> "Getting concurrency");
 		return SUPPORTED_CONCURRENCY;
 	}
 
@@ -739,22 +880,28 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public void moveToInsertRow() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException(
+				"This result sets concurrency is of type CONCUR_READ_ONLY (%d) and does not support moving to insert row"
+					.formatted(SUPPORTED_CONCURRENCY));
 	}
 
 	@Override
 	public void moveToCurrentRow() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		throw new SQLFeatureNotSupportedException(
+				"This result sets concurrency is of type CONCUR_READ_ONLY (%d) and does not support moving to current row"
+					.formatted(SUPPORTED_CONCURRENCY));
 	}
 
 	@Override
 	public Statement getStatement() {
+		LOGGER.log(Level.FINER, () -> "Getting statement");
 		return this.statement;
 	}
 
 	@Override
 	public Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		Neo4jConversions.assertTypeMap(map);
+		return getObject(columnIndex);
 	}
 
 	@Override
@@ -774,12 +921,14 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public Array getArray(int columnIndex) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		logGet("Array", columnIndex);
+		return getValueByColumnIndex(columnIndex, v -> ArrayImpl.of(this.statement.getConnection(), v));
 	}
 
 	@Override
 	public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		Neo4jConversions.assertTypeMap(map);
+		return getObject(columnLabel);
 	}
 
 	@Override
@@ -799,47 +948,56 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public Array getArray(String columnLabel) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		logGet("Array", columnLabel);
+		return getValueByColumnLabel(columnLabel, v -> ArrayImpl.of(this.statement.getConnection(), v));
 	}
 
 	@Override
 	public Date getDate(int columnIndex, Calendar cal) throws SQLException {
+		logGet("Date", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> Neo4jConversions.asDate(value, cal));
 	}
 
 	@Override
 	public Date getDate(String columnLabel, Calendar cal) throws SQLException {
+		logGet("Date", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> Neo4jConversions.asDate(value, cal));
 	}
 
 	@Override
 	public Time getTime(int columnIndex, Calendar cal) throws SQLException {
+		logGet("Time", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> Neo4jConversions.asTime(value, cal));
 	}
 
 	@Override
 	public Time getTime(String columnLabel, Calendar cal) throws SQLException {
+		logGet("Time", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> Neo4jConversions.asTime(value, cal));
 	}
 
 	@Override
 	public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException {
+		logGet("Timestamp", columnIndex);
 		return getValueByColumnIndex(columnIndex, value -> Neo4jConversions.asTimestamp(value, cal));
 	}
 
 	@Override
 	public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException {
+		logGet("Timestamp", columnLabel);
 		return getValueByColumnLabel(columnLabel, value -> Neo4jConversions.asTimestamp(value, cal));
 	}
 
 	@Override
 	public URL getURL(int columnIndex) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		logGet("URL", columnIndex);
+		return getValueByColumnIndex(columnIndex, ResultSetImpl::mapToUrl);
 	}
 
 	@Override
 	public URL getURL(String columnLabel) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		logGet("URL", columnLabel);
+		return getValueByColumnLabel(columnLabel, ResultSetImpl::mapToUrl);
 	}
 
 	@Override
@@ -904,11 +1062,13 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public int getHoldability() {
+		LOGGER.log(Level.FINER, () -> "Getting holdability");
 		return SUPPORTED_HOLDABILITY;
 	}
 
 	@Override
 	public boolean isClosed() {
+		LOGGER.log(Level.FINER, () -> "Getting closed state");
 		return this.closed;
 	}
 
@@ -1124,35 +1284,53 @@ final class ResultSetImpl implements ResultSet {
 
 	@Override
 	public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
-		return getValueByColumnIndex(columnIndex, valueMapperFor(type));
-	}
-
-	private <T> ValueMapper<T> valueMapperFor(Class<T> type) {
-		return value -> {
-			if (type.isInstance(value)) {
-				return type.cast(value);
-			}
-			var obj = mapToObject(value, this.maxFieldSize);
-			if (type.isInstance(obj)) {
-				return type.cast(obj);
-			}
-			throw new SQLException(new UncoercibleException(obj.getClass().getName(), type.getName()));
-		};
+		logGet("Object", columnIndex);
+		return getValueByColumnIndex(columnIndex, valueMapperFor(type, this.maxFieldSize));
 	}
 
 	@Override
 	public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
+		logGet("Object", columnLabel);
+		return getValueByColumnLabel(columnLabel, valueMapperFor(type, this.maxFieldSize));
+	}
 
-		return getValueByColumnLabel(columnLabel, valueMapperFor(type));
+	private static <T> ValueMapper<T> valueMapperFor(Class<T> type, int maxFieldSize) {
+		return value -> {
+			if (type.isInstance(value)) {
+				return type.cast(value);
+			}
+			var optionalJSONMapper = JSONMappers.INSTANCE.getMapper(type.getName());
+			return optionalJSONMapper.map(mapper -> {
+				Object json = mapper.toJson(value);
+				try {
+					return type.cast(json);
+				}
+				catch (ClassCastException ex) {
+					throw new RuntimeException(
+							"Resulting type after mapping is incompatible, use %s or %s for reification"
+								.formatted(json.getClass().getName(), mapper.getBaseType().getName()));
+				}
+			}).or(() -> {
+				var obj = mapToObject(value, maxFieldSize);
+				if (type.isInstance(obj)) {
+					return Optional.of(type.cast(obj));
+				}
+				return Optional.empty();
+			})
+				.orElseThrow(() -> new Neo4jException(
+						GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), type.getName())));
+		};
 	}
 
 	@Override
 	public <T> T unwrap(Class<T> iface) throws SQLException {
+		LOGGER.log(Level.FINER,
+				() -> "Unwrapping `%s` into `%s`".formatted(getClass().getCanonicalName(), iface.getCanonicalName()));
 		if (iface.isAssignableFrom(getClass())) {
 			return iface.cast(this);
 		}
 		else {
-			throw new SQLException("This object does not implement the given interface");
+			throw new Neo4jException(withReason("This object does not implement the given interface"));
 		}
 	}
 
@@ -1163,25 +1341,25 @@ final class ResultSetImpl implements ResultSet {
 
 	private void assertCurrentRecordIsNotNull() throws SQLException {
 		if (this.currentRecord == null) {
-			throw new SQLException("Invalid cursor position");
+			throw new Neo4jException(withReason("Invalid cursor position"));
 		}
 	}
 
 	private void assertIsOpen() throws SQLException {
 		if (this.closed) {
-			throw new SQLException("The result set is closed");
+			throw new Neo4jException(withReason("The result set is closed"));
 		}
 	}
 
 	private void assertColumnIndexIsPresent(int columnIndex) throws SQLException {
 		if (columnIndex < 1 || columnIndex > this.currentRecord.size()) {
-			throw new SQLException("Invalid column index value");
+			throw new Neo4jException(withReason("Invalid column index value"));
 		}
 	}
 
 	private void assertColumnLabelIsPresent(String columnLabel) throws SQLException {
 		if (!this.currentRecord.containsKey(columnLabel)) {
-			throw new SQLException("Invalid column label value");
+			throw new Neo4jException(withReason("Invalid column label value"));
 		}
 	}
 
@@ -1219,7 +1397,32 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.NULL.isTypeOf(value)) {
 			return null;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to String", value.type()));
+
+		try {
+			if (NO_TO_STRING_SUPPORT.stream().anyMatch(t -> t.isTypeOf(value))) {
+				throw new UncoercibleException(value.type().name(), "String");
+			}
+			return value.toString();
+		}
+		catch (UncoercibleException ex) {
+			throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "String"));
+		}
+	}
+
+	private static URL mapToUrl(Value value) throws SQLException {
+		if (Type.STRING.isTypeOf(value)) {
+			try {
+				return new URL(value.asString());
+			}
+			catch (MalformedURLException ex) {
+				throw new Neo4jException(
+						GQLError.$22N37.causedBy(ex).withTemplatedMessage(value.toDisplayString(), "URL"));
+			}
+		}
+		if (Type.NULL.isTypeOf(value)) {
+			return null;
+		}
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "URL"));
 	}
 
 	private static boolean mapToBoolean(Value value) throws SQLException {
@@ -1238,7 +1441,8 @@ final class ResultSetImpl implements ResultSet {
 				return true;
 			}
 			else {
-				throw new SQLException("Number values can not be mapped to boolean aside from 0 and 1 values");
+				throw new Neo4jException(GQLError.$22N37
+					.withMessage("Number values can not be mapped to boolean aside from 0 and 1 values"));
 			}
 		}
 		if (Type.STRING.isTypeOf(value)) {
@@ -1250,10 +1454,11 @@ final class ResultSetImpl implements ResultSet {
 				return true;
 			}
 			else {
-				throw new SQLException("String values can not be mapped to boolean aside from '0' and '1' values");
+				throw new Neo4jException(GQLError.$22N37
+					.withMessage("String values can not be mapped to boolean aside from '0' and '1' values"));
 			}
 		}
-		throw new SQLException(String.format("%s value can not be mapped to boolean", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "boolean"));
 	}
 
 	private static Byte mapToByte(Value value) throws SQLException {
@@ -1262,12 +1467,12 @@ final class ResultSetImpl implements ResultSet {
 			if (longValue >= Byte.MIN_VALUE && longValue <= Byte.MAX_VALUE) {
 				return (byte) longValue;
 			}
-			throw new SQLException("The number is out of byte range");
+			throw new Neo4jException(GQLError.$22003.withTemplatedMessage(longValue));
 		}
 		if (Type.NULL.isTypeOf(value)) {
 			return (byte) 0;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to byte", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "byte"));
 	}
 
 	private static Short mapToShort(Value value) throws SQLException {
@@ -1276,12 +1481,13 @@ final class ResultSetImpl implements ResultSet {
 			if (longValue >= Short.MIN_VALUE && longValue <= Short.MAX_VALUE) {
 				return (short) longValue;
 			}
-			throw new SQLException("The number is out of short range");
+			throw new Neo4jException(GQLError.$22003.withTemplatedMessage(longValue));
 		}
 		if (Type.NULL.isTypeOf(value)) {
 			return (short) 0;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to short", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "short"));
+
 	}
 
 	private static int mapToInteger(Value value) throws SQLException {
@@ -1290,12 +1496,21 @@ final class ResultSetImpl implements ResultSet {
 			if (longValue >= Integer.MIN_VALUE && longValue <= Integer.MAX_VALUE) {
 				return (int) longValue;
 			}
-			throw new SQLException("The number is out of int range");
+			throw new Neo4jException(GQLError.$22003.withTemplatedMessage(longValue));
 		}
 		if (Type.NULL.isTypeOf(value)) {
 			return 0;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to int", value.type()));
+		if (Type.STRING.isTypeOf(value)) {
+			try {
+				return Integer.parseInt(value.asString());
+			}
+			catch (NumberFormatException ex) {
+				throw new Neo4jException(
+						GQLError.$22N37.causedBy(ex).withTemplatedMessage(value.toDisplayString(), "int"));
+			}
+		}
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "int"));
 	}
 
 	private static long mapToLong(Value value) throws SQLException {
@@ -1305,7 +1520,16 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.NULL.isTypeOf(value)) {
 			return 0L;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to long", value.type()));
+		if (Type.STRING.isTypeOf(value)) {
+			try {
+				return Long.parseLong(value.asString());
+			}
+			catch (NumberFormatException ex) {
+				throw new Neo4jException(
+						GQLError.$22N37.causedBy(ex).withTemplatedMessage(value.toDisplayString(), "long"));
+			}
+		}
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "long"));
 	}
 
 	private static float mapToFloat(Value value) throws SQLException {
@@ -1315,12 +1539,12 @@ final class ResultSetImpl implements ResultSet {
 			if (Double.compare(doubleValue, floatValue) == 0) {
 				return floatValue;
 			}
-			throw new SQLException("The number is out of float range");
+			throw new Neo4jException(GQLError.$22003.withTemplatedMessage(value));
 		}
 		if (Type.NULL.isTypeOf(value)) {
 			return 0.0f;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to float", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "float"));
 	}
 
 	private static double mapToDouble(Value value) throws SQLException {
@@ -1330,7 +1554,7 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.NULL.isTypeOf(value)) {
 			return 0.0;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to double", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "double"));
 	}
 
 	@SuppressWarnings("squid:S1168")
@@ -1341,7 +1565,7 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.BYTES.isTypeOf(value)) {
 			return truncate(value.asByteArray(), maxFieldSize);
 		}
-		throw new SQLException(String.format("%s value can not be mapped to byte array", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "byte array"));
 	}
 
 	private static Reader mapToReader(Value value, int maxFieldSize) throws SQLException {
@@ -1351,30 +1575,31 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.NULL.isTypeOf(value)) {
 			return null;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to Reader", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "a reader"));
 	}
 
 	@SuppressWarnings("BigDecimalMethodWithoutRoundingCalled")
 	private static BigDecimal mapToBigDecimal(Value value, Integer scale) throws SQLException {
 
-		var result = switch (value.type()) {
-			case STRING -> new BigDecimal(value.asString());
-			case INTEGER -> BigDecimal.valueOf(value.asLong());
-			case FLOAT -> BigDecimal.valueOf(value.asDouble());
-			case NULL -> null;
-			default -> throw new SQLException(
-					String.format("%s value can not be mapped to java.math.BigDecimal", value.type()));
-		};
+		try {
+			var result = switch (value.type()) {
+				case STRING -> new BigDecimal(value.asString());
+				case INTEGER -> BigDecimal.valueOf(value.asLong());
+				case FLOAT -> BigDecimal.valueOf(value.asDouble());
+				case NULL -> null;
+				default -> throw new Neo4jException(
+						GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.math.BigDecimal"));
+			};
 
-		if (result != null && scale != null) {
-			try {
+			if (result != null && scale != null) {
 				return result.setScale(scale);
 			}
-			catch (ArithmeticException ae) {
-				throw new SQLException(ae);
-			}
+			return result;
 		}
-		return result;
+		catch (NumberFormatException | ArithmeticException ex) {
+			throw new Neo4jException(
+					GQLError.$22N37.causedBy(ex).withTemplatedMessage(value.toDisplayString(), "java.math.BigDecimal"));
+		}
 	}
 
 	private static InputStream mapToAsciiStream(Value value, int maxFieldSize) throws SQLException {
@@ -1385,7 +1610,7 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.NULL.isTypeOf(value)) {
 			return null;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to java.io.InputStream", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.io.InputStream"));
 	}
 
 	private static InputStream mapToBinaryStream(Value value, int maxFieldSize) throws SQLException {
@@ -1398,7 +1623,7 @@ final class ResultSetImpl implements ResultSet {
 		if (Type.NULL.isTypeOf(value)) {
 			return null;
 		}
-		throw new SQLException(String.format("%s value can not be mapped to java.io.InputStream", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.io.InputStream"));
 	}
 
 	private static Object mapToObject(Value value, int maxFieldSize) {

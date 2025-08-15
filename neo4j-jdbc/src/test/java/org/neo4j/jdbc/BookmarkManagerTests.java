@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -58,7 +58,7 @@ class BookmarkManagerTests {
 
 		@Test
 		void mustNotUpdateAndReturnBookmarks() {
-			var bookmarkManager = new VoidBookmarkManagerImpl();
+			var bookmarkManager = new NoopBookmarkManagerImpl();
 			var current = bookmarkManager.getBookmarks(Function.identity());
 			assertThat(current).isEmpty();
 			bookmarkManager.updateBookmarks(Function.identity(), List.of(), List.of("test"));
@@ -75,7 +75,7 @@ class BookmarkManagerTests {
 	class Shared {
 
 		@ParameterizedTest
-		@ValueSource(classes = { DefaultBookmarkManagerImpl.class, VoidBookmarkManagerImpl.class })
+		@ValueSource(classes = { DefaultBookmarkManagerImpl.class, NoopBookmarkManagerImpl.class })
 		void shouldRejectNullNewBookmarks(Class<? extends BookmarkManager> type) throws Exception {
 			BookmarkManager bookmarkManager = type.getDeclaredConstructor().newInstance();
 			Function<Bookmark, String> transformer = Bookmark::value;
@@ -85,7 +85,7 @@ class BookmarkManagerTests {
 		}
 
 		@ParameterizedTest
-		@ValueSource(classes = { DefaultBookmarkManagerImpl.class, VoidBookmarkManagerImpl.class })
+		@ValueSource(classes = { DefaultBookmarkManagerImpl.class, NoopBookmarkManagerImpl.class })
 		void nullOrEmptyUsedBookmarksAreFine(Class<? extends BookmarkManager> type) throws Exception {
 			BookmarkManager bookmarkManager = type.getDeclaredConstructor().newInstance();
 			Function<Bookmark, String> transformer = Bookmark::value;
@@ -94,7 +94,7 @@ class BookmarkManagerTests {
 		}
 
 		@ParameterizedTest
-		@ValueSource(classes = { DefaultBookmarkManagerImpl.class, VoidBookmarkManagerImpl.class })
+		@ValueSource(classes = { DefaultBookmarkManagerImpl.class, NoopBookmarkManagerImpl.class })
 		void transformerIsRequired(Class<? extends BookmarkManager> type) throws Exception {
 			BookmarkManager bookmarkManager = type.getDeclaredConstructor().newInstance();
 			List<Bookmark> used = List.of();

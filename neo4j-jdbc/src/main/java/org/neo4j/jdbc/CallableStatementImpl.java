@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -24,16 +24,19 @@ import java.math.BigDecimal;
 import java.net.URL;
 import java.sql.Array;
 import java.sql.Blob;
-import java.sql.CallableStatement;
 import java.sql.Clob;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.Date;
 import java.sql.NClob;
+import java.sql.ParameterMetaData;
 import java.sql.Ref;
+import java.sql.ResultSet;
 import java.sql.RowId;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
+import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
@@ -44,17 +47,27 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.neo4j.jdbc.Neo4jException.GQLError;
+
+import static org.neo4j.jdbc.Neo4jException.withReason;
+
 final class CallableStatementImpl extends PreparedStatementImpl implements Neo4jCallableStatement {
 
-	private ParameterType parameterType;
+	private static final Logger LOGGER = Logger.getLogger("org.neo4j.jdbc.callable-statement");
 
-	static CallableStatement prepareCall(Connection connection, Neo4jTransactionSupplier transactionSupplier,
-			boolean rewriteBatchedStatements, String sql) throws SQLException {
+	static CallableStatementImpl prepareCall(Connection connection, Neo4jTransactionSupplier transactionSupplier,
+			Consumer<Class<? extends Statement>> onClose, boolean rewriteBatchedStatements, String sql)
+			throws SQLException {
 
 		// We should cache the descriptor if this gets widely used.
 
@@ -72,50 +85,114 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 					descriptor.parameterList, isFunction);
 		}
 
-		if (descriptor.isUsingNamedParameters()) {
-			try (var columns = descriptor.isFunctionCall() ? meta.getFunctionColumns(null, null, descriptor.fqn(), null)
-					: meta.getProcedureColumns(null, null, descriptor.fqn(), null)) {
-				while (columns.next()) {
-					parameterOrder.put(columns.getString("COLUMN_NAME"), columns.getInt("ORDINAL_POSITION"));
+		var parameterTypes = new HashMap<Integer, String>();
+
+		try (var columns = descriptor.isFunctionCall() ? meta.getFunctionColumns(null, null, descriptor.fqn(), null)
+				: meta.getProcedureColumns(null, null, descriptor.fqn(), null)) {
+			while (columns.next()) {
+				var type = columns.getInt("COLUMN_TYPE");
+				var ordinalPosition = columns.getInt("ORDINAL_POSITION");
+
+				parameterOrder.put(columns.getString("COLUMN_NAME"), ordinalPosition);
+
+				// It might be that those JDBC constants are actually the same right
+				// now,
+				// but that might as well change
+				// in a different JDK or "the future"
+				// noinspection ConditionCoveredByFurtherCondition,ConstantValue
+				if (type == DatabaseMetaData.procedureColumnIn || type == DatabaseMetaData.functionColumnIn) {
+					parameterTypes.put(ordinalPosition, columns.getString("DATA_TYPE"));
 				}
 			}
+		}
+
+		if (descriptor.isUsingNamedParameters()) {
 			for (String value : descriptor.parameterList.namedParameters().values()) {
 				if (!parameterOrder.containsKey(value)) {
-					throw new SQLException(
-							"Procedure `" + descriptor.fqn() + "` does not have a named parameter `" + value + "`");
+					throw new Neo4jException(GQLError.$42N51.withMessage(
+							"Procedure `" + descriptor.fqn() + "` does not have a named parameter `" + value + "`"));
 				}
 			}
 		}
 
 		// We can always store the descriptor with the statement to check for yielded /
 		// return values if wished / needed
-		return new CallableStatementImpl(connection, transactionSupplier, rewriteBatchedStatements,
-				descriptor.toCypher(parameterOrder));
+		return new CallableStatementImpl(connection, transactionSupplier, onClose, rewriteBatchedStatements,
+				descriptor.toCypher(parameterOrder), new ParameterMetaDataImpl(parameterTypes));
 	}
 
+	private final AtomicBoolean cursorMoved = new AtomicBoolean(false);
+
+	private final ParameterMetaData parameterMetaData;
+
+	private ParameterType parameterType;
+
+	private ResultSet parameterResultSet;
+
 	CallableStatementImpl(Connection connection, Neo4jTransactionSupplier transactionSupplier,
-			boolean rewriteBatchedStatements, String sql) {
-		super(connection, transactionSupplier, UnaryOperator.identity(), null, rewriteBatchedStatements, sql);
+			Consumer<Class<? extends Statement>> onClose, boolean rewriteBatchedStatements, String sql,
+			ParameterMetaData parameterMetaData) {
+		super(connection, transactionSupplier, UnaryOperator.identity(), null, onClose, false, rewriteBatchedStatements,
+				sql);
+
+		this.parameterMetaData = parameterMetaData;
+	}
+
+	@Override
+	public ParameterMetaData getParameterMetaData() {
+		LOGGER.log(Level.FINER, () -> "Getting parameter meta data");
+		return this.parameterMetaData;
+	}
+
+	@Override
+	public boolean execute() throws SQLException {
+		clearParameterResultSet();
+		this.parameterResultSet = DatabaseMetadataImpl.resultSetForParameters(getConnection(), getCurrentBatch());
+		return super.execute();
+	}
+
+	private void clearParameterResultSet() throws SQLException {
+		if (this.parameterResultSet == null) {
+			return;
+		}
+		this.parameterResultSet.close();
+		this.parameterResultSet = null;
+		this.cursorMoved.set(false);
+	}
+
+	ResultSet assertCallAndPositionAtFirstRow() throws SQLException {
+
+		if (this.parameterResultSet == null) {
+			throw new Neo4jException(withReason("#execute has not been called"));
+		}
+		if (this.cursorMoved.compareAndSet(false, true)) {
+			this.parameterResultSet.next();
+		}
+		return this.parameterResultSet;
 	}
 
 	@Override
 	public void clearParameters() throws SQLException {
 		super.clearParameters();
 		this.parameterType = null;
+		clearParameterResultSet();
 	}
 
 	@Override
 	public void clearBatch() throws SQLException {
-		super.clearBatch();
-		this.parameterType = null;
+		throw newIllegalMethodInvocation();
 	}
 
 	@Override
 	public void registerOutParameter(int parameterIndex, int sqlType) {
+		LOGGER.log(Level.WARNING,
+				() -> "Registering out parameter %d with type %d (ignored)".formatted(parameterIndex, sqlType));
 	}
 
 	@Override
 	public void registerOutParameter(int parameterIndex, int sqlType, int scale) {
+		LOGGER.log(Level.WARNING, () -> "Registering out parameter %d with type %d and scale %d (ignored)"
+			.formatted(parameterIndex, sqlType, scale));
 	}
 
 	@SuppressWarnings("resource")
@@ -264,28 +341,38 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 
 	@Override
 	public void registerOutParameter(int parameterIndex, int sqlType, String typeName) {
+		LOGGER.log(Level.WARNING, () -> "Registering out parameter %d with type %d and type %s (ignored)"
+			.formatted(parameterIndex, sqlType, typeName));
 	}
 
 	@Override
 	public void registerOutParameter(String parameterName, int sqlType) {
+		LOGGER.log(Level.WARNING,
+				() -> "Registering out parameter `%s` with type %d (ignored)".formatted(parameterName, sqlType));
 	}
 
 	@Override
 	public void registerOutParameter(String parameterName, int sqlType, int scale) {
+		LOGGER.log(Level.WARNING, () -> "Registering out parameter `%s` with type %d and scale %d (ignored)"
+			.formatted(parameterName, sqlType, scale));
 	}
 
 	@Override
 	public void registerOutParameter(String parameterName, int sqlType, String typeName) {
+		LOGGER.log(Level.WARNING, () -> "Registering out parameter `%s` with type %d and type %s (ignored)"
+			.formatted(parameterName, sqlType, typeName));
 	}
 
 	@Override
 	public URL getURL(int parameterIndex) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		return assertCallAndPositionAtFirstRow().getURL(parameterIndex);
 	}
 
 	@Override
 	public void setURL(String parameterName, URL value) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		assertParameterType(ParameterType.NAMED);
+		Objects.requireNonNull(parameterName);
+		super.setURL(parameterName, value);
 	}
 
 	@Override
@@ -432,7 +519,8 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 
 	@Override
 	public void setNull(String parameterName, int sqlType, String typeName) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		assertParameterType(ParameterType.NAMED);
+		super.setNull(parameterName, sqlType);
 	}
 
 	@SuppressWarnings("resource")
@@ -833,6 +921,12 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 	}
 
 	@Override
+	public void setURL(int parameterIndex, URL url) throws SQLException {
+		assertParameterType(ParameterType.ORDINAL);
+		super.setURL(parameterIndex, url);
+	}
+
+	@Override
 	public void setBytes(int parameterIndex, byte[] bytes) throws SQLException {
 		assertParameterType(ParameterType.ORDINAL);
 		super.setBytes(parameterIndex, bytes);
@@ -922,8 +1016,8 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 		}
 		else {
 			if (this.parameterType != parameterType) {
-				throw new SQLException(String.format("%s parameter can not be mixed with %s parameter(s)",
-						parameterType, this.parameterType));
+				throw new Neo4jException(GQLError.$42N51.withMessage(String
+					.format("%s parameter can not be mixed with %s parameter(s)", parameterType, this.parameterType)));
 			}
 		}
 	}
@@ -938,65 +1032,105 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 		throw newIllegalMethodInvocation();
 	}
 
+	@Override
+	public void addBatch() throws SQLException {
+		throw newIllegalMethodInvocation();
+	}
+
+	@Override
+	public void addBatch(String sql) throws SQLException {
+		throw newIllegalMethodInvocation();
+	}
+
+	@Override
+	public void setArray(int parameterIndex, Array x) throws SQLException {
+		assertParameterType(ParameterType.ORDINAL);
+		super.setArray(parameterIndex, x);
+	}
+
+	@Override
+	public void setArray(String parameterName, Array x) throws SQLException {
+		assertParameterType(ParameterType.NAMED);
+		super.setArray(parameterName, x);
+	}
+
 	private enum ParameterType {
 
-		ORDINAL, NAMED
+		/**
+		 * Denotates parameter defined by their numeric index.
+		 */
+		ORDINAL,
+		/**
+		 * Parameters given by name (that is, in Cypher format such as {@code $name}.
+		 */
+		NAMED
 
 	}
 
+	@SuppressWarnings({ "squid:S3776" })
 	static ParameterListDescriptor parseParameterList(String parameterList) {
+
+		if (parameterList == null) {
+			return new ParameterListDescriptor(Map.of(), Map.of(), Map.of());
+		}
 
 		var ordinalParameters = new HashMap<Integer, Integer>();
 		var namedParameters = new HashMap<Integer, String>();
 		var constants = new HashMap<Integer, String>();
 
-		if (parameterList != null) {
-			int cnt = 0;
-			for (String s : PARAMETER_LIST_SPLITTER.split(parameterList.trim())) {
-				++cnt;
-				var possibleParameter = s.trim();
-				if (possibleParameter.isEmpty()) {
-					continue;
+		int cnt = 0;
+		for (String s : PARAMETER_LIST_SPLITTER.split(parameterList.trim())) {
+			++cnt;
+			var possibleParameter = s.trim();
+			if (possibleParameter.isEmpty()) {
+				continue;
+			}
+			if ("?".equals(possibleParameter)) {
+				ordinalParameters.put(cnt, -1);
+			}
+			else if (IS_NUMBER.test(possibleParameter)) {
+				ordinalParameters.put(cnt, Integer.parseInt(possibleParameter.replace("$", "")));
+			}
+			else if (possibleParameter.startsWith("$") || possibleParameter.startsWith(":")) {
+				var v = possibleParameter.substring(1);
+				var matcher = VALID_IDENTIFIER_PATTERN.matcher(v);
+				if (matcher.matches() || "0".equals(v)) {
+					namedParameters.put(cnt, v);
 				}
-				if ("?".equals(possibleParameter)) {
-					ordinalParameters.put(cnt, -1);
-				}
-				else if (IS_NUMBER.test(possibleParameter)) {
-					ordinalParameters.put(cnt, Integer.parseInt(possibleParameter.replace("$", "")));
-				}
-				else if (possibleParameter.startsWith("$") || possibleParameter.startsWith(":")) {
-					var v = possibleParameter.substring(1);
-					var matcher = VALID_IDENTIFIER_PATTERN.matcher(v);
-					if (matcher.matches() || "0".equals(v)) {
-						namedParameters.put(cnt, v);
-					}
-				}
-				else {
-					constants.put(cnt, possibleParameter);
-				}
+			}
+			else {
+				constants.put(cnt, possibleParameter);
 			}
 		}
 
+		assertEitherOrdinalOrNamedParameters(ordinalParameters, namedParameters);
+		makeDense(ordinalParameters);
+
+		return new ParameterListDescriptor(ordinalParameters, namedParameters, constants);
+	}
+
+	private static void makeDense(HashMap<Integer, Integer> ordinalParameters) {
+
+		var used = ordinalParameters.values().stream().filter(i -> i > 0).collect(Collectors.toSet());
+		int max = 1;
+		for (Map.Entry<Integer, Integer> entry : ordinalParameters.entrySet()) {
+			Integer key = entry.getKey();
+			Integer v = entry.getValue();
+			if (v < 0) {
+				while (used.contains(max)) {
+					++max;
+				}
+				v = max++;
+			}
+			ordinalParameters.put(key, v);
+		}
+	}
+
+	private static void assertEitherOrdinalOrNamedParameters(Map<Integer, Integer> ordinalParameters,
+			Map<Integer, String> namedParameters) {
 		if (!(ordinalParameters.isEmpty() || namedParameters.isEmpty())) {
 			throw new IllegalArgumentException("Index- and named ordinalParameters cannot be mixed");
 		}
-
-		if (!ordinalParameters.isEmpty()) {
-			var used = ordinalParameters.values().stream().filter(i -> i > 0).collect(Collectors.toSet());
-			int max = 1;
-			for (Map.Entry<Integer, Integer> entry : ordinalParameters.entrySet()) {
-				Integer key = entry.getKey();
-				Integer v = entry.getValue();
-				if (v < 0) {
-					while (used.contains(max)) {
-						++max;
-					}
-					v = max++;
-				}
-				ordinalParameters.put(key, v);
-			}
-		}
-		return new ParameterListDescriptor(ordinalParameters, namedParameters, constants);
 	}
 
 	/**
@@ -1023,47 +1157,22 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 		var matcher = JDBC_CALL.matcher(statement);
 		try {
 			if (matcher.matches()) {
-				var returnParameter = Optional.ofNullable(matcher.group("returnParameter"))
-					.map(String::trim)
-					.orElse("");
-				var returnType = ReturnType.NONE;
-				List<String> returnParameterName = new ArrayList<>();
-				if (!returnParameter.isBlank()) {
-					Optional.ofNullable(matcher.group("returnParameterName"))
-						.map(String::trim)
-						.map(s -> s.substring(1))
-						.ifPresent(returnParameterName::add);
-					returnType = returnParameterName.isEmpty() ? ReturnType.ORDINAL : ReturnType.NAMED;
-				}
-				var parameterList = parseParameterList(matcher.group("parameterList"));
-				return new Descriptor(matcher.group("fqn"), returnType, returnParameterName, parameterList, null);
+				return describeJdbcCall(matcher);
 			}
 
 			matcher = CYPHER_RETURN_CALL.matcher(statement);
 			if (matcher.matches()) {
-				var parameterList = parseParameterList(matcher.group("parameterList"));
-				return new Descriptor(matcher.group("fqn"), ReturnType.ORDINAL, null, parameterList, true);
+				return describeCypherReturnCall(matcher);
 			}
 
 			matcher = CYPHER_YIELD_CALL.matcher(statement);
 			if (matcher.matches()) {
-				var yieldedStuff = Optional.ofNullable(matcher.group("yieldedValues")).map(String::trim).orElse("");
-				List<String> returnParameterName = new ArrayList<>();
-				for (String s : PARAMETER_LIST_SPLITTER.split(yieldedStuff)) {
-					if (!s.isBlank()) {
-						returnParameterName.add(s.trim());
-					}
-				}
-
-				var returnType = returnParameterName.isEmpty() ? ReturnType.ORDINAL : ReturnType.NAMED;
-				var parameterList = parseParameterList(matcher.group("parameterList"));
-				return new Descriptor(matcher.group("fqn"), returnType, returnParameterName, parameterList, false);
+				return describeCypherYieldCall(matcher);
 			}
 
 			matcher = CYPHER_SIDE_EFFECT_CALL.matcher(statement);
 			if (matcher.matches()) {
-				var parameterList = parseParameterList(matcher.group("parameterList"));
-				return new Descriptor(matcher.group("fqn"), ReturnType.NONE, null, parameterList, false);
+				return describeCypherSideEffectCall(matcher);
 			}
 		}
 		catch (IllegalArgumentException ex) {
@@ -1071,6 +1180,45 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 		}
 
 		throw new IllegalArgumentException("Cannot create a callable statement from `" + statement + "`");
+	}
+
+	private static Descriptor describeCypherSideEffectCall(Matcher matcher) {
+		var parameterList = parseParameterList(matcher.group("parameterList"));
+		return new Descriptor(matcher.group("fqn"), ReturnType.NONE, null, parameterList, false);
+	}
+
+	private static Descriptor describeCypherYieldCall(Matcher matcher) {
+		var yieldedStuff = Optional.ofNullable(matcher.group("yieldedValues")).map(String::trim).orElse("");
+		List<String> returnParameterName = new ArrayList<>();
+		for (String s : PARAMETER_LIST_SPLITTER.split(yieldedStuff)) {
+			if (!s.isBlank()) {
+				returnParameterName.add(s.trim());
+			}
+		}
+
+		var returnType = returnParameterName.isEmpty() ? ReturnType.ORDINAL : ReturnType.NAMED;
+		var parameterList = parseParameterList(matcher.group("parameterList"));
+		return new Descriptor(matcher.group("fqn"), returnType, returnParameterName, parameterList, false);
+	}
+
+	private static Descriptor describeCypherReturnCall(Matcher matcher) {
+		var parameterList = parseParameterList(matcher.group("parameterList"));
+		return new Descriptor(matcher.group("fqn"), ReturnType.ORDINAL, null, parameterList, true);
+	}
+
+	private static Descriptor describeJdbcCall(Matcher matcher) {
+		var returnParameter = Optional.ofNullable(matcher.group("returnParameter")).map(String::trim).orElse("");
+		var returnType = ReturnType.NONE;
+		List<String> returnParameterName = new ArrayList<>();
+		if (!returnParameter.isBlank()) {
+			Optional.ofNullable(matcher.group("returnParameterName"))
+				.map(String::trim)
+				.map(s -> s.substring(1))
+				.ifPresent(returnParameterName::add);
+			returnType = returnParameterName.isEmpty() ? ReturnType.ORDINAL : ReturnType.NAMED;
+		}
+		var parameterList = parseParameterList(matcher.group("parameterList"));
+		return new Descriptor(matcher.group("fqn"), returnType, returnParameterName, parameterList, null);
 	}
 
 	private static final Pattern PARAMETER_LIST_SPLITTER = Pattern
@@ -1089,6 +1237,11 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 
 	private static final String PARAMETER_LIST = "(?:\\((?<parameterList>.*)\\))?";
 
+	/**
+	 * A regular expression for the fully qualified method name and its parameter list.
+	 * @deprecated No replacement, not to be used externally
+	 */
+	@Deprecated(forRemoval = true, since = "6.5.0")
 	public static final String FQN_AND_PARAMETER_LIST = "(?<fqn>" + VALID_IDENTIFIER + ")" + WS + PARAMETER_LIST;
 
 	private static final Pattern JDBC_CALL = Pattern
@@ -1106,7 +1259,18 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 
 	enum ReturnType {
 
-		NONE, ORDINAL, NAMED, YIELD
+		/**
+		 * The statement won't return anything.
+		 */
+		NONE,
+		/**
+		 * The statement returns data to be retrieved by index.
+		 */
+		ORDINAL,
+		/**
+		 * The statement returns data by name.
+		 */
+		NAMED
 
 	}
 
@@ -1122,7 +1286,7 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 
 		String toCypher(Map<String, Integer> parameterOrder) {
 
-			if (this.ordinalParameters.isEmpty() && this.namedParameters().isEmpty() && this.constants.isEmpty()) {
+			if (isEmpty()) {
 				return "";
 			}
 
@@ -1134,6 +1298,10 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 			});
 			all.putAll(this.constants);
 			return all.values().stream().collect(Collectors.joining(", ", "(", ")"));
+		}
+
+		boolean isEmpty() {
+			return this.ordinalParameters.isEmpty() && this.namedParameters().isEmpty() && this.constants.isEmpty();
 		}
 	}
 
@@ -1189,6 +1357,10 @@ final class CallableStatementImpl extends PreparedStatementImpl implements Neo4j
 			}
 
 			return sb.toString();
+		}
+
+		boolean hasParameters() {
+			return !this.parameterList.isEmpty();
 		}
 	}
 

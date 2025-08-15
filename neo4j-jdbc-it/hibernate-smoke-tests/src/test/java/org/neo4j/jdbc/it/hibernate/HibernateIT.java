@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -51,7 +51,8 @@ class HibernateIT {
 		this.sessionFactory = new Configuration().addAnnotatedClass(Movie.class)
 			.setProperty(AvailableSettings.JAKARTA_JDBC_DRIVER, Neo4jDriver.class)
 			.setProperty(AvailableSettings.JAKARTA_JDBC_URL,
-					"jdbc:neo4j://localhost:" + this.neo4j.getMappedPort(7687) + "?enableSQLTranslation=true")
+					"jdbc:neo4j://" + this.neo4j.getHost() + ":" + this.neo4j.getMappedPort(7687)
+							+ "?enableSQLTranslation=true")
 			.setProperty(AvailableSettings.JAKARTA_JDBC_USER, "neo4j")
 			.setProperty(AvailableSettings.JAKARTA_JDBC_PASSWORD, this.neo4j.getAdminPassword())
 			.setProperty(AvailableSettings.SHOW_SQL, true)

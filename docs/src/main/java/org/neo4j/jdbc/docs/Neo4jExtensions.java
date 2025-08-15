@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -31,6 +31,7 @@ public final class Neo4jExtensions {
 	private Neo4jExtensions() {
 	}
 
+	@SuppressWarnings("squid:S2096")
 	public static void main(String... a) throws SQLException {
 
 		try (var con = Neo4jDriver.fromEnv().orElseThrow();

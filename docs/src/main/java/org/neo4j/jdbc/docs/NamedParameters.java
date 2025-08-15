@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -32,6 +32,9 @@ public final class NamedParameters {
 	private NamedParameters() {
 	}
 
+	// This is about Sonar not recognizing our named parameter variant; also, let's throw
+	// all the things
+	@SuppressWarnings({ "squid:S2695", "squid:S2096", "squid:S2068" })
 	public static void main(String... a) throws SQLException {
 		var url = "jdbc:neo4j://localhost:7687";
 		var username = "neo4j";
@@ -40,7 +43,7 @@ public final class NamedParameters {
 		// tag::index[]
 		var cypher = "CREATE (m:Movie {title: $1})";
 		try (var con = DriverManager.getConnection(url, username, password);
-				PreparedStatement stmt = con.prepareStatement(cypher);) {
+				PreparedStatement stmt = con.prepareStatement(cypher)) {
 			stmt.setString(1, "Test");
 			stmt.executeUpdate();
 		}
@@ -49,7 +52,7 @@ public final class NamedParameters {
 		// tag::index-sql[]
 		var sql = "INSERT INTO Movie (title) VALUES (?)";
 		try (var con = DriverManager.getConnection(url + "?enableSQLTranslation=true", username, password);
-				PreparedStatement stmt = con.prepareStatement(sql);) {
+				PreparedStatement stmt = con.prepareStatement(sql)) {
 			stmt.setString(1, "Test");
 			stmt.executeUpdate();
 		}
@@ -58,7 +61,7 @@ public final class NamedParameters {
 		// tag::index-np[]
 		var match = "MATCH (n:Movie {title: $title}) RETURN n.title AS title";
 		try (var con = DriverManager.getConnection(url, username, password);
-				Neo4jPreparedStatement stmt = (Neo4jPreparedStatement) con.prepareStatement(match);) {
+				Neo4jPreparedStatement stmt = (Neo4jPreparedStatement) con.prepareStatement(match)) {
 			stmt.setString("title", "Test");
 			try (var resultSet = stmt.executeQuery()) {
 				while (resultSet.next()) {

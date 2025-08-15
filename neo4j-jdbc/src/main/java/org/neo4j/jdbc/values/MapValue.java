@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -21,6 +21,7 @@ package org.neo4j.jdbc.values;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -34,10 +35,7 @@ public final class MapValue extends AbstractValue {
 	private final Map<String, Value> val;
 
 	MapValue(Map<String, Value> val) {
-		if (val == null) {
-			throw new IllegalArgumentException("Cannot construct MapValue from null");
-		}
-		this.val = val;
+		this.val = Objects.requireNonNull(val, "Cannot construct MapValue from null");
 	}
 
 	@Override
@@ -47,12 +45,12 @@ public final class MapValue extends AbstractValue {
 
 	@Override
 	public Map<String, Object> asObject() {
-		return asMap(Values.ofObject());
+		return asMap(Value::asObject);
 	}
 
 	@Override
 	public Map<String, Object> asMap() {
-		return map(this.val, Values.ofObject());
+		return map(this.val, Value::asObject);
 	}
 
 	@Override

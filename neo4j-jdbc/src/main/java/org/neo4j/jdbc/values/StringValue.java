@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -31,10 +31,7 @@ public final class StringValue extends AbstractValue {
 	private final String val;
 
 	StringValue(String val) {
-		if (val == null) {
-			throw new IllegalArgumentException("Cannot construct StringValue from null");
-		}
-		this.val = val;
+		this.val = Objects.requireNonNull(val, "Cannot construct StringValue from null");
 	}
 
 	@Override

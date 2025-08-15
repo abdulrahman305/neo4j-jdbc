@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -48,7 +48,9 @@ import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.neo4j.cypherdsl.core.renderer.Configuration;
 import org.neo4j.cypherdsl.core.renderer.Dialect;
 import org.neo4j.cypherdsl.core.renderer.Renderer;
@@ -57,6 +59,8 @@ import org.neo4j.jdbc.translator.spi.Translator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.mock;
 
@@ -82,6 +86,35 @@ class SqlToCypherTests {
 		given(personColumns.next()).willReturn(true, results);
 		given(personColumns.getString("COLUMN_NAME")).willReturn(firstName, names);
 		return personColumns;
+	}
+
+	static Stream<Arguments> concatShouldWork() {
+		return Stream.of(Arguments.of("SELECT 'a' || 'b'", "RETURN ('a' + 'b')"),
+				Arguments.of("SELECT 'a' || 'b' || 'c'", "RETURN (('a' + 'b') + 'c')"),
+				Arguments.of("SELECT CONCAT('a', 'b')", "RETURN ('a' + 'b')"),
+				Arguments.of("SELECT CONCAT('a')", "RETURN 'a'"),
+				Arguments.of("SELECT CONCAT('a', 'b', 'c')", "RETURN ('a' + ('b' + 'c'))"));
+	}
+
+	@ParameterizedTest
+	@MethodSource
+	void concatShouldWork(String sql, String expectedCypher) {
+
+		var cypher = NON_PRETTY_PRINTING_TRANSLATOR.translate(sql);
+		assertThat(cypher).isEqualTo(expectedCypher);
+	}
+
+	@Test
+	void singleTable() {
+		var cypher = NON_PRETTY_PRINTING_TRANSLATOR.translate(
+				"""
+						SELECT "installed_rank","version","description","type","script","checksum","installed_on","installed_by","execution_time","success"
+						FROM "public"."flyway_schema_history"
+						WHERE "installed_rank" > ?
+						ORDER BY "installed_rank"
+						""");
+		assertThat(cypher).isEqualTo(
+				"MATCH (flyway_schema_history:flyway_schema_history) WHERE flyway_schema_history.installed_rank > $1 RETURN flyway_schema_history.installed_rank AS installed_rank, flyway_schema_history.version AS version, flyway_schema_history.description AS description, flyway_schema_history.type AS type, flyway_schema_history.script AS script, flyway_schema_history.checksum AS checksum, flyway_schema_history.installed_on AS installed_on, flyway_schema_history.installed_by AS installed_by, flyway_schema_history.execution_time AS execution_time, flyway_schema_history.success AS success ORDER BY flyway_schema_history.installed_rank");
 	}
 
 	@Test
@@ -138,6 +171,7 @@ class SqlToCypherTests {
 	void inClauseWithConstantsJoinWithmeta() throws SQLException {
 
 		DatabaseMetaData databaseMetaData = mock(DatabaseMetaData.class);
+		given(databaseMetaData.getTables(any(), any(), any(), any())).willReturn(mock(ResultSet.class));
 		var resultSet = makeColumns("title");
 		given(databaseMetaData.getColumns(null, null, "Movie", null)).willReturn(resultSet);
 		resultSet = makeColumns("foobar");
@@ -157,9 +191,9 @@ class SqlToCypherTests {
 				""", databaseMetaData)).isEqualTo(renderer.render(CypherParser.parse("""
 				MATCH (movie:Movie)-[has:HAS]->(genre:Genre)
 				WHERE genre.name IN ['action comedy film', 'romcom']
-				RETURN elementId(movie) AS element_id, movie.title AS title,
-					elementId(has) AS element_id1, has.foobar AS foobar,
-					elementId(genre) AS element_id2, genre.name AS name
+				RETURN elementId(movie) AS `v$id`, movie.title AS title,
+					elementId(has) AS `v$id1`, has.foobar AS foobar,
+					elementId(genre) AS `v$id2`, genre.name AS name
 				""")));
 	}
 
@@ -167,6 +201,7 @@ class SqlToCypherTests {
 	void plainColumnsEverywhere() throws SQLException {
 
 		DatabaseMetaData databaseMetaData = mock(DatabaseMetaData.class);
+		given(databaseMetaData.getTables(any(), any(), any(), any())).willReturn(mock(ResultSet.class));
 		var resultSet1 = makeColumns("title", "released");
 		var resultSet2 = makeColumns("title", "released");
 		var resultSet3 = makeColumns("title", "released");
@@ -198,7 +233,21 @@ class SqlToCypherTests {
 	void projectingRandomColumnsFromTable() {
 
 		assertThat(NON_PRETTY_PRINTING_TRANSLATOR.translate("SELECT name, born FROM Person"))
-			.isEqualTo("MATCH (person:Person) RETURN person.name, person.born");
+			.isEqualTo("MATCH (person:Person) RETURN person.name AS name, person.born AS born");
+	}
+
+	@Test
+	void projectingRandomColumnsFromTable2() {
+
+		assertThat(NON_PRETTY_PRINTING_TRANSLATOR.translate("SELECT name, born FROM Person p"))
+			.isEqualTo("MATCH (p:Person) RETURN p.name AS name, p.born AS born");
+	}
+
+	@Test
+	void projectingRandomColumnsFromTable3() {
+
+		assertThat(NON_PRETTY_PRINTING_TRANSLATOR.translate("SELECT p.name, p.born FROM Person p"))
+			.isEqualTo("MATCH (p:Person) RETURN p.name, p.born");
 	}
 
 	@Test
@@ -269,11 +318,18 @@ class SqlToCypherTests {
 			.isEqualTo("MATCH (a:Actor) WHERE id(a) = 4711 SET a.name = 'Foo'");
 	}
 
+	@Test
+	void emptyStatementShouldNotFail() {
+
+		var cypher = SqlToCypher.defaultTranslator().translate("   // test");
+		assertThat(cypher).isEqualTo("FINISH");
+	}
+
 	@ParameterizedTest
 	@CsvSource(delimiterString = "|", textBlock = """
-			SELECT name, count(*) FROM People p GROUP BY name|MATCH (p:People) RETURN p.name, count(*)
-			SELECT name, max(age) FROM People p GROUP BY name|MATCH (p:People) RETURN p.name, max(p.age)
-			SELECT name, min(age) FROM People p GROUP BY name|MATCH (p:People) RETURN p.name, min(p.age)
+			SELECT name, count(*) FROM People p GROUP BY name|MATCH (p:People) RETURN p.name AS name, count(*)
+			SELECT name, max(age) FROM People p GROUP BY name|MATCH (p:People) RETURN p.name AS name, max(p.age)
+			SELECT name, min(age) FROM People p GROUP BY name|MATCH (p:People) RETURN p.name AS name, min(p.age)
 			SELECT sum(age) FROM People p GROUP BY name|MATCH (p:People) RETURN sum(p.age)
 			SELECT avg(age) FROM People p GROUP BY name|MATCH (p:People) RETURN avg(p.age)
 			SELECT percentileCont(age) FROM People p GROUP BY name|MATCH (p:People) RETURN percentileCont(p.age)
@@ -310,7 +366,7 @@ class SqlToCypherTests {
 
 		assertThat(NON_PRETTY_PRINTING_TRANSLATOR
 			.translate("select distinct \"NAME\" from \"Pgm\" where \"snapshotId\" = ?"))
-			.isEqualTo("MATCH (pgm:Pgm) WHERE pgm.snapshotId = $1 RETURN DISTINCT pgm.NAME");
+			.isEqualTo("MATCH (pgm:Pgm) WHERE pgm.snapshotId = $1 RETURN DISTINCT pgm.NAME AS NAME");
 	}
 
 	@ParameterizedTest
@@ -349,7 +405,7 @@ class SqlToCypherTests {
 			return Stream.empty();
 		}
 
-		var files = parentFolder.listFiles((f) -> f.getName().toLowerCase().endsWith(".adoc"));
+		var files = parentFolder.listFiles(f -> f.getName().toLowerCase().endsWith(".adoc"));
 		if (files == null) {
 			return Stream.empty();
 		}
@@ -407,6 +463,152 @@ class SqlToCypherTests {
 		assertThat(cypher).isEqualTo(expected.replace("$", cfg.isPrettyPrint() ? System.lineSeparator() : " "));
 	}
 
+	@Test
+	void extractionShouldFailOnSomeProperties() {
+		var translator = SqlToCypher.defaultTranslator();
+		assertThatIllegalStateException().isThrownBy(() -> translator.translate("""
+				SELECT COUNT(*)
+							FROM Orders o
+							WHERE CENTURY(OrderDate) = 1997
+				""")).withMessage("Unsupported value for date/time extraction: CENTURY");
+	}
+
+	@TestFactory
+	Stream<DynamicContainer> directCompare() {
+
+		var like = List.of(
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%Test%'",
+						"MATCH (b:blub) WHERE b.name CONTAINS 'Test' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%Test'",
+						"MATCH (b:blub) WHERE b.name ENDS WITH 'Test' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like 'Test%'",
+						"MATCH (b:blub) WHERE b.name STARTS WITH 'Test' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like 'This is _ %Test%'",
+						"MATCH (b:blub) WHERE b.name =~ 'This is . .*Test.*' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%'",
+						"MATCH (b:blub) WHERE b.name =~ '.*' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%%'",
+						"MATCH (b:blub) WHERE b.name =~ '.*' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%%%'",
+						"MATCH (b:blub) WHERE b.name =~ '.*' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '_'",
+						"MATCH (b:blub) WHERE b.name =~ '.' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '__'",
+						"MATCH (b:blub) WHERE b.name =~ '..' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '___'",
+						"MATCH (b:blub) WHERE b.name =~ '...' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%_%'",
+						"MATCH (b:blub) WHERE b.name =~ '.*..*' RETURN *"),
+				SqlAndCypher.of("SELECT * FROM blub b WHERE name like '%ein%schöner%Name%'",
+						"MATCH (b:blub) WHERE b.name =~ '.*ein.*schöner.*Name.*' RETURN *"));
+		var blog = List.of(
+				SqlAndCypher.of("Get all columns from the Customers table.", "SELECT * FROM Customers",
+						"MATCH (customers:Customer) RETURN *"),
+				SqlAndCypher.of("Get all columns from the Customers table.", "SELECT * FROM Customers c",
+						"MATCH (c:Customer) RETURN *"),
+				SqlAndCypher.of("Get all columns from the Customers table.", "SELECT c FROM Customers c",
+						"MATCH (c:Customer) RETURN c"),
+				SqlAndCypher.of("Get the count of all Orders made during 1997.", """
+						SELECT COUNT(*)
+						FROM Orders o
+						WHERE YEAR(OrderDate) = 1997
+						""", "MATCH (o:Order) WHERE o.OrderDate.year = 1997 RETURN count(*)"),
+				SqlAndCypher.of("Get the count of all Orders made during 1997.", """
+						SELECT COUNT(o)
+						FROM Orders o
+						WHERE YEAR(OrderDate) = 1997
+						""", "MATCH (o:Order) WHERE o.OrderDate.year = 1997 RETURN count(o)"),
+				SqlAndCypher.of(
+						"Get all orders placed on the 19th of May, 1997. (Not a chance without schema figuring out that this is a date)",
+						"""
+								SELECT *
+								FROM Orders
+								WHERE OrderDate = '19970319'
+								""", "MATCH (orders:Order) WHERE orders.OrderDate = '19970319' RETURN *"),
+				SqlAndCypher.of("Create a report for all the orders of 1996 and their Customers.", """
+						SELECT *
+						FROM Orders o
+						INNER JOIN Customers c ON o.CustomerID = c.CustomerID
+						WHERE YEAR(o.OrderDate) = 1996
+						""",
+						"MATCH (o:Order)<-[purchased:PURCHASED]-(c:Customer) WHERE o.OrderDate.year = 1996 RETURN *"),
+				SqlAndCypher.of(
+						"Create a report for all 1996 orders and their Customers. Return only the Order ID, Order Date, Customer ID, Name, and Country.",
+						"""
+								SELECT o.OrderID, o.OrderDate, c.CustomerID, c.ContactName, c.Country
+								FROM Orders o
+								INNER JOIN Customers c ON o.CustomerID = c.CustomerID
+								WHERE YEAR(o.OrderDate) = 1996
+								""",
+						"MATCH (o:Order)<-[purchased:PURCHASED]-(c:Customer) WHERE o.OrderDate.year = 1996 RETURN o.OrderID, o.OrderDate, c.CustomerID, c.ContactName, c.Country"),
+				SqlAndCypher.of("Create a report that shows the number of customers from each city.", """
+						SELECT c.City, COUNT(*)
+						FROM Orders o
+						INNER JOIN Customers c ON o.CustomerID = c.CustomerID
+						GROUP BY c.City
+						""", "MATCH (o:Order)<-[purchased:PURCHASED]-(c:Customer) RETURN c.City, count(*)"),
+				SqlAndCypher.of("Insert yourself into the Customers table",
+						"""
+								INSERT INTO Customers (CustomerID, CompanyName, ContactName, ContactTitle, Address, City, Region, PostalCode, Country, Phone, Fax)
+								VALUES ('ILYA1', 'Acme Corp', 'Ilya Verbitskiy', 'Manager', '123 Main St', 'New York', 'NY', '10001', 'USA', '555-1234', '555-5678')
+								""",
+						"CREATE (customers:Customer {CustomerID: 'ILYA1', CompanyName: 'Acme Corp', ContactName: 'Ilya Verbitskiy', ContactTitle: 'Manager', Address: '123 Main St', City: 'New York', Region: 'NY', PostalCode: '10001', Country: 'USA', Phone: '555-1234', Fax: '555-5678'})"),
+				SqlAndCypher.of("Update the phone number.",
+						"UPDATE Customers SET Phone = '000-4321' WHERE CustomerID = 'ILYA'",
+						"MATCH (customers:Customer) WHERE customers.CustomerID = 'ILYA' SET customers.Phone = '000-4321'"),
+				SqlAndCypher.of("Get the top 25 Customers alphabetically by Country and name.", """
+						SELECT TOP 25 *
+						FROM Customers
+						ORDER BY Country, ContactName
+						""",
+						"MATCH (customers:Customer) RETURN * ORDER BY customers.Country, customers.ContactName LIMIT 25"),
+				SqlAndCypher.of("Get the top 25 Countries alphabetically by Country and name.", """
+						SELECT TOP 25 Country
+						FROM Customers
+						ORDER BY Country, ContactName
+						""",
+						"MATCH (customers:Customer) RETURN customers.Country AS Country ORDER BY customers.Country, customers.ContactName LIMIT 25"),
+				SqlAndCypher.of("Get the top 25 Customers alphabetically by Country and name.", """
+						SELECT TOP 25 *
+						FROM Customers c
+						ORDER BY Country, ContactName
+						""", "MATCH (c:Customer) RETURN * ORDER BY c.Country, c.ContactName LIMIT 25"),
+				SqlAndCypher.of("Get the top 25 Customers alphabetically by Country and name.", """
+						SELECT TOP 25 c
+						FROM Customers c
+						ORDER BY Country, ContactName
+						""", "MATCH (c:Customer) RETURN c ORDER BY c.Country, c.ContactName LIMIT 25"));
+
+		return Stream.of(
+				DynamicContainer.dynamicContainer("https://verbitskiy.co/blog/neo4j-cypher-cheat-sheet/",
+						DynamicTest.stream(blog.stream(), SqlAndCypher::displayName, this::compare)),
+				DynamicContainer.dynamicContainer("likeShouldBeHandledNicely",
+						DynamicTest.stream(like.stream(), SqlAndCypher::displayName, this::compare)));
+	}
+
+	void compare(SqlAndCypher sqlAndCypher) {
+		var translator = SqlToCypher.with(SqlToCypherConfig.builder()
+			.withTableToLabelMappings(Map.of("Customers", "Customer", "Orders", "Order"))
+			.withJoinColumnsToTypeMappings(Map.of("Orders.CustomerID", "PURCHASED"))
+			.build());
+		assertThat(translator.translate(sqlAndCypher.sql())).isEqualTo(sqlAndCypher.cypher());
+	}
+
+	private record SqlAndCypher(String name, String sql, String cypher) {
+		static SqlAndCypher of(String name, String sql, String cypher) {
+			return new SqlAndCypher(name, sql, cypher);
+
+		}
+
+		static SqlAndCypher of(String sql, String cypher) {
+			return new SqlAndCypher(null, sql, cypher);
+		}
+
+		String displayName() {
+			return Optional.ofNullable(this.name).orElse(this.sql);
+		}
+	}
+
 	private static class TestDataExtractor extends Treeprocessor {
 
 		private final List<TestData> testData = new ArrayList<>();
@@ -421,10 +623,10 @@ class SqlToCypherTests {
 			var blocks = document.findBy(Map.of("context", ":listing", "style", "source"))
 				.stream()
 				.map(Block.class::cast)
-				.filter((b) -> b.hasAttribute("id"))
+				.filter(b -> b.hasAttribute("id"))
 				.collect(Collectors.toMap(ContentNode::getId, Function.identity()));
 
-			blocks.values().stream().filter((b) -> "sql".equals(b.getAttribute("language"))).map((sqlBlock) -> {
+			blocks.values().stream().filter(b -> "sql".equals(b.getAttribute("language"))).map(sqlBlock -> {
 				var name = (String) sqlBlock.getAttribute("name");
 				var sql = String.join("\n", sqlBlock.getLines());
 				var cypherBlock = blocks.get(sqlBlock.getId() + "_expected");
@@ -443,6 +645,12 @@ class SqlToCypherTests {
 					String metaData = (String) sqlBlock.getAttribute("metaData");
 
 					databaseMetaData = mock(DatabaseMetaData.class);
+					try {
+						given(databaseMetaData.getTables(any(), any(), any(), any())).willReturn(mock(ResultSet.class));
+					}
+					catch (SQLException ex) {
+						throw new RuntimeException(ex);
+					}
 					for (String m : metaData.split(";")) {
 						var endIndex = m.indexOf(":");
 						String label = m.substring(0, endIndex);

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,17 +25,17 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-translator</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>neo4j-jdbc-translator-spi</artifactId>
 
 	<packaging>jar</packaging>
 	<name>Neo4j JDBC Driver (SQL Translator SPI)</name>
-	<description>SPI for to be implemented by any SQL to Cypher translation service.</description>
+	<description>SPI to be implemented by any SQL to Cypher translation service.</description>
 
 	<properties>
-		<sonar.coverage.jacoco.xmlReportPaths>${basedir}/../${aggregate.report.dir}</sonar.coverage.jacoco.xmlReportPaths>
+		<sonar.coverage.jacoco.xmlReportPaths>${basedir}/../../${aggregate.report.dir}</sonar.coverage.jacoco.xmlReportPaths>
 	</properties>
 
 	<dependencies>

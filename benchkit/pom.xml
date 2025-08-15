@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,7 +25,7 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-parent</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 	</parent>
 	<artifactId>neo4j-jdbc-benchkit</artifactId>
 
@@ -34,6 +34,7 @@
 
 	<properties>
 		<base-package>org.neo4j.jdbc.benchkit</base-package>
+		<sonar.coverage.exclusions>**/*.*</sonar.coverage.exclusions>
 	</properties>
 
 	<dependencyManagement>
@@ -161,6 +162,20 @@
 				<artifactId>maven-javadoc-plugin</artifactId>
 				<configuration>
 					<skip>true</skip>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<!-- Can't use -dangling-doc-comments in Java 17, see https://docs.oracle.com/en/java/javase/23/docs/specs/man/javac.html,
+				 so we enable all and print the warnings only for this module. -->
+				<configuration combine.self="override">
+					<forceLegacyJavacApi>true</forceLegacyJavacApi>
+					<showWarnings>true</showWarnings>
+					<compilerArgs>
+						<arg>-Xlint:all</arg>
+						<arg>-parameters</arg>
+					</compilerArgs>
 				</configuration>
 			</plugin>
 		</plugins>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -27,7 +27,7 @@ import java.util.Properties;
 // end::cdm[]
 // end::ddm[]
 
-@SuppressWarnings("resource")
+@SuppressWarnings({ "resource", "squid:S1854", "squid:S2068", "squid:S1481" })
 // tag::cdm[]
 // tag::ddm[]
 class Configuration {

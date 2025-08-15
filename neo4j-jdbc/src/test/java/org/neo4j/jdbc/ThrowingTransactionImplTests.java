@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -36,17 +36,17 @@ class ThrowingTransactionImplTests {
 
 	@Test
 	void mustAlwaysBeRolledBack() {
-		assertThat(new ThrowingTransactionImpl().getState()).isEqualTo(Neo4jTransaction.State.ROLLEDBACK);
+		assertThat(new ThrowingTransactionImpl().getState()).isEqualTo(Neo4jTransaction.State.READY);
 	}
 
 	@Test
-	void mustNotBeRunnable() {
-		assertThat(new ThrowingTransactionImpl().isRunnable()).isFalse();
+	void newCanBeRunnable() {
+		assertThat(new ThrowingTransactionImpl().isRunnable()).isTrue();
 	}
 
 	@Test
-	void mustNotBeOpen() {
-		assertThat(new ThrowingTransactionImpl().isOpen()).isFalse();
+	void newMustBeOpen() {
+		assertThat(new ThrowingTransactionImpl().isOpen()).isTrue();
 	}
 
 	@Test
@@ -54,13 +54,46 @@ class ThrowingTransactionImplTests {
 		assertThat(new ThrowingTransactionImpl().isAutoCommit()).isFalse();
 	}
 
+	@Test
+	void canBeCommitted() throws SQLException {
+		var tx = new ThrowingTransactionImpl();
+		tx.commit();
+		assertThat(tx.getState()).isEqualTo(Neo4jTransaction.State.COMMITTED);
+	}
+
+	@Test
+	void cannotBeCommittedInNonReadyState() throws SQLException {
+		var tx = new ThrowingTransactionImpl();
+		tx.commit();
+		assertThat(tx.getState()).isEqualTo(Neo4jTransaction.State.COMMITTED);
+		assertThatExceptionOfType(SQLException.class).isThrownBy(tx::commit)
+			.withMessage(
+					"invalid transaction termination - Failed to commit transaction: Cannot commit in COMMITTED state")
+			.matches(ex -> "2DN01".equals(ex.getSQLState()));
+	}
+
+	@Test
+	void canBeRolledback() throws SQLException {
+		var tx = new ThrowingTransactionImpl();
+		tx.rollback();
+		assertThat(tx.getState()).isEqualTo(Neo4jTransaction.State.ROLLEDBACK);
+	}
+
+	@Test
+	void cannotBeRolledbackInNonReadyState() throws SQLException {
+		var tx = new ThrowingTransactionImpl();
+		tx.commit();
+		assertThat(tx.getState()).isEqualTo(Neo4jTransaction.State.COMMITTED);
+		assertThatExceptionOfType(SQLException.class).isThrownBy(tx::rollback)
+			.withMessage("transaction rollback - Failed to rollback transaction: Cannot rollback in COMMITTED state")
+			.matches(ex -> "40N01".equals(ex.getSQLState()));
+	}
+
 	static Stream<Arguments> mustThrowOnAllOtherMethods() {
 		var tx = new ThrowingTransactionImpl();
 		return Stream.of(Arguments.of((ThrowableAssert.ThrowingCallable) () -> tx.runAndPull(null, null, 0, 0)),
 				Arguments.of((ThrowableAssert.ThrowingCallable) () -> tx.runAndDiscard(null, null, 0, false)),
-				Arguments.of((ThrowableAssert.ThrowingCallable) () -> tx.pull(null, 0)),
-				Arguments.of((ThrowableAssert.ThrowingCallable) tx::commit),
-				Arguments.of((ThrowableAssert.ThrowingCallable) tx::rollback));
+				Arguments.of((ThrowableAssert.ThrowingCallable) () -> tx.pull(null, 0)));
 	}
 
 	@ParameterizedTest

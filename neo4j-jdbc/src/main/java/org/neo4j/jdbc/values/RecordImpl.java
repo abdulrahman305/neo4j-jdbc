@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -93,7 +93,7 @@ final class RecordImpl extends AbstractMapAccessorWithDefaultValue implements Re
 
 	@Override
 	public Map<String, Object> asMap() {
-		return ValueUtils.map(this, Values.ofObject());
+		return ValueUtils.map(this, Value::asObject);
 	}
 
 	@Override

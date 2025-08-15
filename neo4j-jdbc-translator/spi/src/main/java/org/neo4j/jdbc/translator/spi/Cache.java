@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -76,5 +76,14 @@ public interface Cache<K, V> {
 	 * Flushes all entries of the cache.
 	 */
 	void flush();
+
+	/**
+	 * This is an unsupported operation by default, override this to indicate the size of
+	 * the cache.
+	 * @return the current size of the cache
+	 */
+	default int size() {
+		throw new UnsupportedOperationException();
+	}
 
 }

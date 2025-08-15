@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -27,6 +27,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.neo4j.jdbc.Neo4jDriver;
+import org.neo4j.jdbc.values.IsoDuration;
+import org.neo4j.jdbc.values.PointValue;
 import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -34,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers(disabledWithoutDocker = true)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class Neo4jDriverIT {
+class Neo4jDriverIT {
 
 	@SuppressWarnings("resource") // On purpose to reuse this
 	protected final Neo4jContainer<?> neo4j = TestUtils.getNeo4jContainer();
@@ -55,7 +57,7 @@ public class Neo4jDriverIT {
 	void driverMinorVersionMustWork() {
 
 		var driver = new Neo4jDriver();
-		assertThat(driver.getMinorVersion()).isZero();
+		assertThat(driver.getMinorVersion()).isGreaterThanOrEqualTo(0);
 	}
 
 	@Test
@@ -82,7 +84,7 @@ public class Neo4jDriverIT {
 		assertThat(connection).isNotNull();
 		assertThat(validateConnection(connection)).isTrue();
 		assertThat(connection.nativeSQL("SELECT * FROM FooBar"))
-			.isEqualTo("MATCH (foobar:FooBar) RETURN elementId(foobar) AS element_id");
+			.isEqualTo("MATCH (foobar:FooBar) RETURN elementId(foobar) AS `v$id`");
 
 		try (var stmt = connection.createStatement();
 				var rs = stmt.executeQuery(connection.nativeSQL("SELECT count(*) FROM Whatever"))) {
@@ -106,7 +108,7 @@ public class Neo4jDriverIT {
 		assertThat(connection).isNotNull();
 		assertThat(validateConnection(connection)).isTrue();
 		assertThat(connection.nativeSQL("SELECT * FROM genres"))
-			.isEqualTo("MATCH (genres:Genre) RETURN elementId(genres) AS element_id");
+			.isEqualTo("MATCH (genres:Genre) RETURN elementId(genres) AS `v$id`");
 
 		var driver = new Neo4jDriver();
 		var propertyInfo = driver.getPropertyInfo(url, new Properties());
@@ -126,7 +128,7 @@ public class Neo4jDriverIT {
 		assertThat(connection).isNotNull();
 		assertThat(validateConnection(connection)).isTrue();
 		assertThat(connection.nativeSQL("SELECT * FROM genres"))
-			.isEqualTo("MATCH (genres:Genre) RETURN elementId(genres) AS element_id");
+			.isEqualTo("MATCH (genres:Genre) RETURN elementId(genres) AS `v$id`");
 
 		var driver = new Neo4jDriver();
 		var propertyInfo = driver.getPropertyInfo(url, properties);
@@ -141,6 +143,28 @@ public class Neo4jDriverIT {
 		var driver = DriverManager.getDriver(url);
 		try (var connection = driver.connect(url, new Properties()); var stmt = connection.createStatement()) {
 			stmt.executeQuery("RETURN 1").close();
+		}
+		assertThat(((Neo4jDriver) driver).getCurrentBookmarks(url)).isNotEmpty();
+	}
+
+	@Test
+	void typesThatHadSpecialHandling() throws SQLException {
+
+		var url = computeUrl();
+		var driver = DriverManager.getDriver(url);
+		try (var connection = driver.connect(url, new Properties());
+				var stmt = connection.createStatement();
+				var rs = stmt.executeQuery(
+						"RETURN point({latitude: toFloat('13.43'), longitude: toFloat('56.21')}) AS p1, duration('P14DT16H12M') AS theDuration")) {
+			assertThat(rs.next()).isTrue();
+			var point = rs.getObject("p1", PointValue.class).asPoint();
+			assertThat(point.x()).isEqualTo(56.21);
+			assertThat(point.y()).isEqualTo(13.43);
+			assertThat(point.srid()).isEqualTo(4326);
+
+			var duration = rs.getObject("theDuration", IsoDuration.class);
+			assertThat(duration.days()).isEqualTo(14);
+			assertThat(duration.seconds()).isEqualTo(16 * 60 * 60 + 12 * 60);
 		}
 		assertThat(((Neo4jDriver) driver).getCurrentBookmarks(url)).isNotEmpty();
 	}

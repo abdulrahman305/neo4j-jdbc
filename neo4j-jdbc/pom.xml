@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,7 +25,7 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-parent</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>neo4j-jdbc</artifactId>
@@ -52,12 +52,18 @@
 
 	<dependencies>
 		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
 			<groupId>io.github.cdimascio</groupId>
 			<artifactId>dotenv-java</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>io.netty</groupId>
-			<artifactId>netty-handler</artifactId>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-core</artifactId>
+			<optional>true</optional>
 		</dependency>
 		<dependency>
 			<groupId>org.neo4j</groupId>
@@ -65,7 +71,24 @@
 		</dependency>
 		<dependency>
 			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-authn-spi</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
 			<artifactId>neo4j-jdbc-translator-spi</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j.bolt</groupId>
+			<artifactId>neo4j-bolt-connection-netty</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j.bolt</groupId>
+			<artifactId>neo4j-bolt-connection-query-api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.github.stefanbirkner</groupId>
+			<artifactId>system-lambda</artifactId>
+			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>com.tngtech.archunit</groupId>
@@ -100,6 +123,49 @@
 			<plugin>
 				<groupId>com.github.siom79.japicmp</groupId>
 				<artifactId>japicmp-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>default-test</id>
+						<configuration combine.self="override">
+							<excludes>
+								<exclude>**/JSONMappersTests.java</exclude>
+							</excludes>
+						</configuration>
+					</execution>
+
+					<execution>
+						<id>json_mappers_with_deps</id>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<useModulePath>false</useModulePath>
+							<includes>
+								<include>**/JSONMappersTests.java</include>
+							</includes>
+						</configuration>
+					</execution>
+					<execution>
+						<id>json_mappers_without_deps</id>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<useModulePath>false</useModulePath>
+							<includes>
+								<include>**/JSONMappersTests.java</include>
+							</includes>
+							<argLine>@{argLine} -DwithoutRequiredJSONDependencies=true</argLine>
+							<classpathDependencyExcludes>
+								<dependency>com.fasterxml.jackson.core:jackson-databind</dependency>
+							</classpathDependencyExcludes>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>

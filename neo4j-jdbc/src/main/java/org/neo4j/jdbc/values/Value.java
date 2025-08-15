@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -575,5 +575,14 @@ public interface Value extends MapAccessorWithDefaultValue {
 
 	@Override
 	String toString();
+
+	/**
+	 * A utility method to enhance {@link #toString()} with the type information.
+	 * @return string representation including the type
+	 * @since 6.4.0
+	 */
+	default String toDisplayString() {
+		return "%s (%s)".formatted(this, this.type());
+	}
 
 }

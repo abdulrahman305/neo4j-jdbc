@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -32,6 +32,7 @@ import java.sql.Connection;
 import java.sql.Date;
 import java.sql.NClob;
 import java.sql.ParameterMetaData;
+import java.sql.PreparedStatement;
 import java.sql.Ref;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -39,6 +40,7 @@ import java.sql.RowId;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
+import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayDeque;
@@ -47,26 +49,37 @@ import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Comparator;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 
+import org.neo4j.jdbc.Neo4jException.GQLError;
 import org.neo4j.jdbc.values.Value;
 import org.neo4j.jdbc.values.ValueException;
 import org.neo4j.jdbc.values.Values;
 
+import static org.neo4j.jdbc.Neo4jException.withInternal;
+import static org.neo4j.jdbc.Neo4jException.withReason;
+
 sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPreparedStatement
 		permits CallableStatementImpl {
 
-	private static final Logger LOGGER = Logger.getLogger(Neo4jPreparedStatement.class.getCanonicalName());
+	private static final Logger LOGGER = Logger.getLogger("org.neo4j.jdbc.prepared-statement");
 
-	private static final Pattern SQL_PLACEHOLDER_PATTERN = Pattern.compile("\\?(?=[^\"]*(?:\"[^\"]*\"[^\"]*)*$)");
+	/**
+	 * Matches question marks outside double and single quoted strings, nested quotes will
+	 * break it.
+	 */
+	private static final Pattern SQL_PLACEHOLDER_PATTERN = Pattern
+		.compile("\\?(?=(?:[^\"']*[\"'][^\"']*[\"'])*[^\"']*$)");
 
 	// We did not consider using concurrent datastructures as the `PreparedStatement` is
 	// usually not treated as thread-safe
@@ -92,16 +105,24 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 	}
 
 	PreparedStatementImpl(Connection connection, Neo4jTransactionSupplier transactionSupplier,
-			UnaryOperator<String> translator, Warnings localWarnings, boolean rewriteBatchedStatements, String sql) {
-		super(connection, transactionSupplier, translator, localWarnings);
+			UnaryOperator<String> translator, Warnings localWarnings, Consumer<Class<? extends Statement>> onClose,
+			boolean rewritePlaceholders, boolean rewriteBatchedStatements, String sql) {
+		super(connection, transactionSupplier,
+				rewritePlaceholders ? s -> PreparedStatementImpl.rewritePlaceholders(translator.apply(s)) : translator,
+				localWarnings, onClose);
 		this.rewriteBatchedStatements = rewriteBatchedStatements;
 		this.sql = sql;
 		this.poolable = true;
-		this.parameters.add(new HashMap<>());
+		this.parameters.add(newParameterMap());
+	}
+
+	private static LinkedHashMap<String, Object> newParameterMap() {
+		return new LinkedHashMap<>();
 	}
 
 	@Override
 	public ResultSet executeQuery() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Executing query");
 		assertIsOpen();
 		return super.executeQuery0(this.sql, true, getCurrentBatch());
 	}
@@ -112,6 +133,7 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 
 	@Override
 	public int executeUpdate() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Executing update");
 		assertIsOpen();
 		return super.executeUpdate0(this.sql, true, getCurrentBatch());
 	}
@@ -138,18 +160,21 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 
 	@Override
 	public void addBatch() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Adding batch");
 		assertIsOpen();
-		this.parameters.addLast(new HashMap<>());
+		this.parameters.addLast(newParameterMap());
 	}
 
 	@Override
 	public void clearParameters() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Clearing parameters");
 		assertIsOpen();
 		getCurrentBatch().clear();
 	}
 
 	@Override
 	public int[] executeBatch() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Executing batch");
 		assertIsOpen();
 		// Apply any SQL to Cypher transformation upfront and assume a simple
 		// CREATE statement provided and not something that already does an unwind.
@@ -200,12 +225,31 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 
 	@Override
 	public void clearBatch() throws SQLException {
+		LOGGER.log(Level.FINER, () -> "Clearing batch");
 		assertIsOpen();
 		this.parameters.clear();
-		this.parameters.add(new HashMap<>());
+		this.parameters.add(newParameterMap());
 	}
 
 	final void setParameter(String key, Object value) {
+		LOGGER.log(Level.FINER, () -> {
+			Object valueLogged;
+			String type;
+			if (value != null) {
+				valueLogged = "******";
+				if (value instanceof Value hlp) {
+					type = hlp.type().name();
+				}
+				else {
+					type = value.getClass().getName();
+				}
+			}
+			else {
+				valueLogged = "(literal) null";
+				type = Void.class.getName();
+			}
+			return "Setting parameter `%s` to `%s` (%s)".formatted(key, valueLogged, type);
+		});
 		getCurrentBatch().put(Objects.requireNonNull(key), value);
 	}
 
@@ -402,8 +446,8 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 
 	private static void assertValidStreamLength(String name, int parameterIndex, int length) throws SQLException {
 		if (length < 0) {
-			throw new SQLException(
-					"Invalid length %d for %s stream at index %d".formatted(length, name, parameterIndex));
+			throw new Neo4jException(GQLError.$22N02
+				.withMessage("Invalid length %d for %s stream at index %d".formatted(length, name, parameterIndex)));
 		}
 	}
 
@@ -413,7 +457,7 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 			bytes = in.readNBytes(length);
 		}
 		catch (IOException ex) {
-			throw new SQLException(ex);
+			throw new Neo4jException(withInternal(ex));
 		}
 		setParameter(parameterName, Values.value(new String(bytes, DEFAULT_ASCII_CHARSET_FOR_INCOMING_STREAM)));
 	}
@@ -438,7 +482,7 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 			bytes = in.readNBytes(length);
 		}
 		catch (IOException ex) {
-			throw new SQLException(ex);
+			throw new Neo4jException(withInternal(ex));
 		}
 		setParameter(parameterName, Values.value(bytes));
 	}
@@ -552,18 +596,23 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 			setParameter(parameterName, neo4jValue);
 		}
 		else {
+			var optionalJSONMapper = Optional.ofNullable(value)
+				.map(Object::getClass)
+				.flatMap(type -> JSONMappers.INSTANCE.getMapper(type.getName()));
 			try {
-				setParameter(parameterName, Values.value(value));
+				setParameter(parameterName,
+						optionalJSONMapper.map(mapper -> mapper.fromJson(value)).orElseGet(() -> Values.value(value)));
 			}
 			catch (ValueException ex) {
-				throw new SQLException(ex);
+				throw new Neo4jException(withInternal(ex));
 			}
 		}
 	}
 
 	@Override
 	public boolean execute() throws SQLException {
-		return super.execute0(this.sql, true, getCurrentBatch());
+		LOGGER.log(Level.FINER, () -> "Executing");
+		return super.execute0(this.sql, getCurrentBatch());
 	}
 
 	@Override
@@ -581,7 +630,7 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 			lengthRead = in.read(charBuffer, 0, length);
 		}
 		catch (IOException ex) {
-			throw new SQLException(ex);
+			throw new Neo4jException(withInternal(ex));
 		}
 		setParameter(parameterName, Values.value((lengthRead != -1) ? new String(charBuffer, 0, lengthRead) : ""));
 	}
@@ -603,13 +652,50 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 
 	@Override
 	public void setArray(int parameterIndex, Array x) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		assertIsOpen();
+		assertValidParameterIndex(parameterIndex);
+		setArray0(computeParameterName(parameterIndex), x);
+	}
+
+	@Override
+	public void setArray(String parameterName, Array x) throws SQLException {
+		assertIsOpen();
+		Objects.requireNonNull(parameterName);
+		setArray0(parameterName, x);
+	}
+
+	private void setArray0(String parameterName, Array x) throws SQLException {
+		if (x == null) {
+			setParameter(parameterName, Values.NULL);
+			return;
+		}
+
+		Value value;
+		if ("BYTES".equals(x.getBaseTypeName())) {
+			value = Values.value(x.getArray());
+		}
+		else {
+			var hlp = new ArrayList<Value>();
+			try (var rs = x.getResultSet()) {
+				while (rs.next()) {
+					hlp.add(rs.getObject(2, Value.class));
+				}
+			}
+			value = Values.value(hlp);
+		}
+		setParameter(parameterName, value);
 	}
 
 	@SuppressWarnings("resource")
 	@Override
 	public ResultSetMetaData getMetaData() throws SQLException {
-		assertCallAndPositionAtFirstRow();
+		LOGGER.log(Level.FINER, () -> "Getting meta data");
+		if (super.resultSet == null) {
+			throw new Neo4jException(withReason("#execute has not been called"));
+		}
+		if (this.cursorMoved.compareAndSet(false, true)) {
+			super.resultSet.next();
+		}
 		return super.resultSet.getMetaData();
 	}
 
@@ -648,17 +734,31 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 
 	@Override
 	public void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		assertIsOpen();
+		assertValidParameterIndex(parameterIndex);
+		setParameter(computeParameterName(parameterIndex), Values.NULL);
 	}
 
 	@Override
-	public void setURL(int parameterIndex, URL x) throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+	public void setURL(int parameterIndex, URL url) throws SQLException {
+		assertIsOpen();
+		assertValidParameterIndex(parameterIndex);
+		setParameter(computeParameterName(parameterIndex), (url != null) ? Values.value(url.toString()) : Values.NULL);
 	}
 
+	/**
+	 * The Neo4j JDBC Driver does not inspect prepared or callable statements, hence the
+	 * number of parameters will be only known after all parameters have been explicitly
+	 * set. As a consequence, the driver is also not aware of the actual type of
+	 * parameters for prepared statements, meaning for any prepared statement this method
+	 * is of limited use.
+	 * @return a restricted set of information about this statements parameter
+	 * @see PreparedStatement#getParameterMetaData()
+	 */
 	@Override
 	public ParameterMetaData getParameterMetaData() {
-		return new ParameterMetaDataImpl();
+		LOGGER.log(Level.FINER, () -> "Getting parameter meta data");
+		return new ParameterMetaDataImpl(this.getCurrentBatch().size());
 	}
 
 	@Override
@@ -730,7 +830,7 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 	static int getLengthAsInt(long length) throws SQLException {
 		var lengthAsInt = (int) length;
 		if (lengthAsInt != length) {
-			throw new SQLException("length larger than integer max value is not supported");
+			throw new Neo4jException(GQLError.$22003.withTemplatedMessage(length));
 		}
 		return lengthAsInt;
 	}
@@ -797,28 +897,25 @@ sealed class PreparedStatementImpl extends StatementImpl implements Neo4jPrepare
 		throw new SQLFeatureNotSupportedException();
 	}
 
-	protected final ResultSet assertCallAndPositionAtFirstRow() throws SQLException {
-		if (resultSet == null) {
-			throw new SQLException("#execute has not been called");
-		}
-		if (this.cursorMoved.compareAndSet(false, true)) {
-			this.resultSet.next();
-		}
-		return resultSet;
-	}
-
 	private static String computeParameterName(int parameterIndex) {
 		return String.valueOf(parameterIndex);
 	}
 
-	static SQLException newIllegalMethodInvocation() {
-		return new SQLException("This method must not be called on PreparedStatement");
+	SQLException newIllegalMethodInvocation() {
+		return new Neo4jException(withReason(
+				"This method must not be called on %s".formatted(this.getClass().getSimpleName().replace("Impl", ""))));
 	}
 
 	private static void assertValidParameterIndex(int index) throws SQLException {
 		if (index < 1) {
-			throw new SQLException("Parameter index must be equal or more than 1");
+			throw new Neo4jException(GQLError.$22003.withMessage("Parameter index must be equal or more than 1"));
 		}
+	}
+
+	protected void setURL(String parameterName, URL value) throws SQLException {
+		assertIsOpen();
+		Objects.requireNonNull(parameterName);
+		setParameter(parameterName, (value != null) ? Values.value(value.toString()) : Values.NULL);
 	}
 
 }

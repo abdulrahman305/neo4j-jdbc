@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright (c) 2023-2024 "Neo4j,"
+# Copyright (c) 2023-2025 "Neo4j,"
 # Neo4j Sweden AB [https://neo4j.com]
 #
 # This file is part of Neo4j.
@@ -33,9 +33,13 @@ mkdir -p "$(dirname "${OUT}")"
 
 if [ "$#" -ne 3 ]; then
   sed -e '/\/\/ start::shaded-dependencies/,/\/\/ end::shaded-dependencies/d' \
-      -e 's/\/\/ requires \(.*\);/requires \1;/' "$IN" | cat -s > "$OUT"
+      -e 's/\/\/ requires \(.*\);/requires \1;/' \
+      -e 's/\/\/ provides \(org.neo4j.jdbc.internal.shaded.bolt.*\);/provides \1;/' \
+      -e 's/\/\/ uses \(.*\);/uses \1;/' "$IN" | cat -s > "$OUT"
 else
   sed -e '/\/\/ start::shaded-dependencies/,/\/\/ end::shaded-dependencies/d' \
       -e 's/\/\/ requires \(.*\);/requires \1;/' \
-      -e 's/\/\/ provides \(.*\);/provides \1;/' "$IN" | cat -s > "$OUT"
+      -e 's/\/\/ exports \(.*\);/exports \1;/' \
+      -e 's/\/\/ provides \(.*\);/provides \1;/' \
+      -e 's/\/\/ uses \(.*\);/uses \1;/' "$IN" | cat -s > "$OUT"
 fi;

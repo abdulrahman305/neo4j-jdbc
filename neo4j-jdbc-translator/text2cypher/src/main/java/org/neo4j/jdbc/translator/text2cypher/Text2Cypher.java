@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -25,7 +25,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.service.AiServices;
@@ -42,8 +41,6 @@ import org.neo4j.jdbc.translator.spi.Translator;
  * @author Gerrit Meier
  */
 final class Text2Cypher implements Translator {
-
-	private static final Logger LOGGER = Logger.getLogger(Text2Cypher.class.getCanonicalName());
 
 	private static final String PREFIX = "🤖, ";
 
@@ -76,11 +73,11 @@ final class Text2Cypher implements Translator {
 		String modelName = (config.get(CONFIG_KEY_OPEN_AI_MODEL_NAME) != null)
 				? (String) config.get(CONFIG_KEY_OPEN_AI_MODEL_NAME) : "gpt-4-turbo";
 
-		Double temperature = 0.0;
+		double temperature = 0.0;
 
 		try {
 			if (config.get(CONFIG_KEY_OPEN_AI_TEMPERATURE) != null) {
-				temperature = Double.valueOf((String) config.get(CONFIG_KEY_OPEN_AI_TEMPERATURE));
+				temperature = Double.parseDouble((String) config.get(CONFIG_KEY_OPEN_AI_TEMPERATURE));
 			}
 		}
 		catch (NumberFormatException ex) {
@@ -96,7 +93,7 @@ final class Text2Cypher implements Translator {
 			.apiKey(openAIApiKey)
 			.build();
 
-		this.cypherExpert = AiServices.builder(CypherExpert.class).chatLanguageModel(model).build();
+		this.cypherExpert = AiServices.builder(CypherExpert.class).chatModel(model).build();
 		this.precedence = configurePrecedence(config);
 	}
 

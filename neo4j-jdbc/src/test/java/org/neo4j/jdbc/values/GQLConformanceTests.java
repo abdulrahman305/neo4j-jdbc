@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -30,6 +30,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -70,8 +71,11 @@ class GQLConformanceTests {
 								"DATETIME '2024-01-03T15:52:00+01:00'")),
 				newContainer("Duration and periods",
 						new Holder(Values.value(Duration.ofDays(23).plusHours(23)), "DURATION 'PT575H'"),
-						new Holder(Values.value(Period.ofMonths(3).plusDays(1)), "P3M1D")),
-				newContainer("Collections", new Holder(Values.value(List.of(1, 2, 3, 4)), "[1, 2, 3, 4]")),
+						new Holder(Values.value(Duration.ofSeconds(150)), "DURATION 'PT2M30S'"),
+						new Holder(Values.value(Period.ofMonths(3).plusDays(1)), "P3M1D"),
+						new Holder(Values.value(Period.ofMonths(12)), "P1Y")),
+				newContainer("Collections", new Holder(Values.value(List.of(1, 2, 3, 4)), "[1, 2, 3, 4]"),
+						new Holder(Values.value(Map.of("a", 1, "b", 2, "c", "haha")), "{a: 1, b: 2, c: \"haha\"}")),
 				newContainer("Strings", new Holder(Values.value("test"), "\"test\"")));
 	}
 

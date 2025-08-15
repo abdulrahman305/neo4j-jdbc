@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -28,8 +28,11 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
+import org.neo4j.jdbc.Neo4jException.GQLError;
 import org.neo4j.jdbc.values.Type;
 import org.neo4j.jdbc.values.Value;
 import org.neo4j.jdbc.values.Values;
@@ -63,7 +66,16 @@ final class Neo4jConversions {
 	 * 6
 	 */
 	static String oldCypherTypesToNew(String neo4jType) {
-		return switch (neo4jType) {
+		if (neo4jType == null) {
+			return "ANY";
+		}
+
+		String value = neo4jType;
+		if (value.startsWith("LIST<")) {
+			value = "LIST";
+		}
+		value = value.replaceAll("( NOT)? NULL", "");
+		return switch (value) {
 			// Simple
 			case "Boolean" -> "BOOLEAN";
 			case "Double" -> "FLOAT";
@@ -85,7 +97,14 @@ final class Neo4jConversions {
 			case "Null" -> "NULL";
 			// this is not a cypher type but needs to be represented for jdbc
 			case "Any" -> "ANY";
-			default -> "OTHER";
+			default -> {
+				try {
+					yield valueOfV5Name(neo4jType).name();
+				}
+				catch (IllegalArgumentException ex) {
+					yield "OTHER";
+				}
+			}
 		};
 	}
 
@@ -95,9 +114,8 @@ final class Neo4jConversions {
 			case BOOLEAN -> Types.BOOLEAN;
 			case BYTES -> Types.BLOB;
 			case STRING -> Types.VARCHAR;
-			case NUMBER -> Types.BIGINT;
-			case INTEGER -> Types.INTEGER;
-			case FLOAT -> Types.FLOAT;
+			case NUMBER, INTEGER -> Types.BIGINT;
+			case FLOAT -> Types.DOUBLE;
 			case LIST -> Types.ARRAY;
 			case MAP, POINT, PATH, RELATIONSHIP, NODE -> Types.STRUCT;
 			case DATE -> Types.DATE;
@@ -108,13 +126,27 @@ final class Neo4jConversions {
 	}
 
 	static Type valueOfV5Name(String in) {
+		if (in == null) {
+			return Type.ANY;
+		}
 
+		// See (2025-06-11)
+		// https://neo4j.com/docs/cypher-manual/current/values-and-types/property-structural-constructed/
 		var value = in.replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
 			.replaceAll("([a-z])([A-Z])", "$1_$2")
 			.toUpperCase(Locale.ROOT);
+		if (value.startsWith("LIST<")) {
+			value = "LIST";
+		}
+		value = value.replaceAll("( NOT)? NULL", "");
 		value = switch (value) {
 			case "LONG" -> Type.INTEGER.name();
 			case "DOUBLE" -> Type.FLOAT.name();
+			// Translation of Cypher 25 dates
+			case "LOCAL TIME" -> Type.LOCAL_TIME.name();
+			case "LOCAL DATETIME" -> Type.LOCAL_DATE_TIME.name();
+			case "ZONED TIME" -> Type.TIME.name();
+			case "ZONED DATETIME" -> Type.DATE_TIME.name();
 			default -> value.endsWith("ARRAY") ? Type.LIST.name() : value;
 		};
 		return Type.valueOf(value);
@@ -154,7 +186,7 @@ final class Neo4jConversions {
 		if (Type.LOCAL_DATE_TIME.isTypeOf(value)) {
 			return Time.valueOf(value.asLocalDateTime().toLocalTime());
 		}
-		throw new SQLException(String.format("%s value cannot be mapped to java.sql.Time", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.sql.Time"));
 	}
 
 	static Time asTime(Value value, Calendar calendar) throws SQLException {
@@ -177,7 +209,7 @@ final class Neo4jConversions {
 			offsetTime = value.asLocalDateTime().toLocalTime().atOffset(targetOffset);
 		}
 		else {
-			throw new SQLException(String.format("%s value cannot be mapped to java.sql.Time", value.type()));
+			throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.sql.Time"));
 		}
 		return Time.valueOf(offsetTime.toLocalTime());
 	}
@@ -203,7 +235,7 @@ final class Neo4jConversions {
 		if (Type.LOCAL_DATE_TIME.isTypeOf(value)) {
 			return Timestamp.valueOf(value.asLocalDateTime());
 		}
-		throw new SQLException(String.format("%s value cannot be mapped to java.sql.Timestamp", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.sql.Timestamp"));
 	}
 
 	static Timestamp asTimestamp(Value value, Calendar calendar) throws SQLException {
@@ -220,7 +252,8 @@ final class Neo4jConversions {
 			hlp = value.asLocalDateTime().atZone(zonedDateTime);
 		}
 		else {
-			throw new SQLException(String.format("%s value cannot be mapped to java.sql.Timestamp", value.type()));
+			throw new Neo4jException(
+					GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.sql.Timestamp"));
 		}
 		return Timestamp.valueOf(hlp.toLocalDateTime());
 	}
@@ -249,7 +282,7 @@ final class Neo4jConversions {
 		if (Type.LOCAL_DATE_TIME.isTypeOf(value)) {
 			return Date.valueOf(value.asLocalDateTime().toLocalDate());
 		}
-		throw new SQLException(String.format("%s value cannot be mapped to java.sql.Date", value.type()));
+		throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.sql.Date"));
 	}
 
 	static Date asDate(Value value, Calendar calendar) throws SQLException {
@@ -269,9 +302,26 @@ final class Neo4jConversions {
 			zonedDateTime = value.asLocalDateTime().atZone(targetZone);
 		}
 		else {
-			throw new SQLException(String.format("%s value cannot be mapped to java.sql.Date", value.type()));
+			throw new Neo4jException(GQLError.$22N37.withTemplatedMessage(value.toDisplayString(), "java.sql.Date"));
 		}
 		return Date.valueOf(zonedDateTime.toLocalDate());
+	}
+
+	/**
+	 * Asserts that the type map is supported. As of 6.4.0 will always throw an exception
+	 * on a non-null and not-empty map.
+	 * @param map the map to assert
+	 * @throws SQLException with SQL state 22N11 if the map is a non-empty map
+	 */
+	static void assertTypeMap(Map<String, Class<?>> map) throws SQLException {
+		if (!(map == null || map.isEmpty())) {
+			var mapValue = map.entrySet()
+				.stream()
+				.sorted(Map.Entry.comparingByKey())
+				.map(e -> "%s = %s".formatted(e.getKey(), e.getValue()))
+				.collect(Collectors.joining(", "));
+			throw new Neo4jException(GQLError.$22N11.withTemplatedMessage("non-empty type map %s".formatted(mapValue)));
+		}
 	}
 
 }

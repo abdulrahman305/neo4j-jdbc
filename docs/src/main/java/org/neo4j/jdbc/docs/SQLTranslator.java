@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -27,6 +27,7 @@ import java.util.logging.Logger;
 
 // end::imports[]
 
+@SuppressWarnings({ "squid:S2068", "squid:S1192" })
 public final class SQLTranslator {
 
 	private static final Logger LOGGER = Logger.getAnonymousLogger();
@@ -34,6 +35,7 @@ public final class SQLTranslator {
 	private SQLTranslator() {
 	}
 
+	@SuppressWarnings("squid:S2096")
 	public static void main(String... args) throws SQLException {
 		caseByCase();
 		alwaysWithUrlConfig();
@@ -59,6 +61,8 @@ public final class SQLTranslator {
 		// end::pt1[]
 	}
 
+	// Unconditional logging is for sure fine in this example.
+	@SuppressWarnings("squid:S2629")
 	static void alwaysWithUrlConfig() throws SQLException {
 
 		var username = "neo4j";
@@ -76,6 +80,8 @@ public final class SQLTranslator {
 		// end::pt2[]
 	}
 
+	// Unconditional logging is for sure fine in this example.
+	@SuppressWarnings("squid:S2629")
 	static void escapeHatch() throws SQLException {
 
 		var username = "neo4j";

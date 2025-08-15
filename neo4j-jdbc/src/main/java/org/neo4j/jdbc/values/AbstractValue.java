@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -118,7 +118,7 @@ abstract class AbstractValue extends AbstractMapAccessorWithDefaultValue impleme
 
 	@Override
 	public List<Object> asList() {
-		return asList(Values.ofObject());
+		return asList(Value::asObject);
 	}
 
 	@Override
@@ -128,7 +128,7 @@ abstract class AbstractValue extends AbstractMapAccessorWithDefaultValue impleme
 
 	@Override
 	public Map<String, Object> asMap() {
-		return asMap(Values.ofObject());
+		return asMap(Value::asObject);
 	}
 
 	@Override

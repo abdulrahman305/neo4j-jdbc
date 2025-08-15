@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -22,6 +22,12 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.neo4j.jdbc.Neo4jTransaction.PullResponse;
+import org.neo4j.jdbc.Neo4jTransaction.RunResponse;
+
+import static org.neo4j.jdbc.Neo4jException.withReason;
 
 /**
  * This is intended as almost a no-op implementation of a statement that we mainly return
@@ -31,13 +37,23 @@ import java.sql.SQLFeatureNotSupportedException;
  */
 final class LocalStatementImpl extends StatementImpl {
 
-	LocalStatementImpl() {
-		super();
-	}
+	private final Connection connection;
+
+	private final RunResponse runResponse;
+
+	private final PullResponse pullResponse;
 
 	private boolean closeOnCompletion;
 
 	private boolean closed;
+
+	private final AtomicBoolean resultSetAcquired = new AtomicBoolean(false);
+
+	LocalStatementImpl(Connection connection, RunResponse runResponse, PullResponse pullResponse) {
+		this.connection = connection;
+		this.runResponse = runResponse;
+		this.pullResponse = pullResponse;
+	}
 
 	@Override
 	public ResultSet executeQuery(String sql) throws SQLException {
@@ -66,17 +82,22 @@ final class LocalStatementImpl extends StatementImpl {
 
 	@Override
 	public ResultSet getResultSet() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+
+		if (!this.resultSetAcquired.compareAndSet(false, true)) {
+			throw new Neo4jException(withReason("Result set has already been acquired"));
+		}
+		return new ResultSetImpl(this, new ThrowingTransactionImpl(), this.runResponse, this.pullResponse, -1, -1, -1);
 	}
 
 	@Override
 	public int getUpdateCount() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		assertIsOpen();
+		return -1;
 	}
 
 	@Override
 	public boolean getMoreResults() {
-		return false;
+		return !this.resultSetAcquired.get();
 	}
 
 	@Override
@@ -95,8 +116,8 @@ final class LocalStatementImpl extends StatementImpl {
 	}
 
 	@Override
-	public Connection getConnection() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+	public Connection getConnection() {
+		return this.connection;
 	}
 
 	@Override
@@ -141,7 +162,8 @@ final class LocalStatementImpl extends StatementImpl {
 
 	@Override
 	public int getResultSetHoldability() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		assertIsOpen();
+		return ResultSet.CLOSE_CURSORS_AT_COMMIT;
 	}
 
 	@Override
@@ -163,6 +185,13 @@ final class LocalStatementImpl extends StatementImpl {
 	@Override
 	public boolean isCloseOnCompletion() {
 		return this.closeOnCompletion;
+	}
+
+	@Override
+	protected void assertIsOpen() throws SQLException {
+		if (this.closed) {
+			throw new Neo4jException(withReason("The statement set is closed"));
+		}
 	}
 
 }

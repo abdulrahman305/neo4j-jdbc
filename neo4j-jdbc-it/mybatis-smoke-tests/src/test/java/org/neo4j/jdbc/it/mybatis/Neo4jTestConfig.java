@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -50,7 +50,7 @@ class Neo4jTestConfig {
 	static class Neo4jJdbcContainer<S extends Neo4jJdbcContainer<S>> extends JdbcDatabaseContainer<S> {
 
 		private static final WaitStrategy WAIT_FOR_BOLT = (new LogMessageWaitStrategy())
-			.withRegEx(String.format(".*Bolt enabled on .*:%d\\.\n", 7687));
+			.withRegEx(".*Bolt enabled on .+:7687\\.\n");
 
 		final String adminPassword = "verysecret";
 

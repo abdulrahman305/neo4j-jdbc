@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -43,6 +43,7 @@ public final class TransactionMetadata {
 	private TransactionMetadata() {
 	}
 
+	@SuppressWarnings({"squid:S2096", "squid:S2068"})
 	// tag::example[]
 	public static void main(String... args) throws SQLException {
 		var url = "jdbc:neo4j://localhost:7687";

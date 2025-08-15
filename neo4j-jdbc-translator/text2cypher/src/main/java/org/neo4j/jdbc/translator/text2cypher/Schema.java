@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -67,16 +67,14 @@ final class Schema {
 			.append(properties.stream().collect(Collectors.joining(", ", "{", "}")))
 			.append(","));
 		sb.replace(sb.length() - 1, sb.length(), "\nThe relationships are the following:\n");
-		this.relationships.forEach(r -> {
-			sb.append("(:")
-				.append(r.sourceLabel())
-				.append(")-[:")
-				.append(r.type())
-				.append("]->(:")
-				.append(r.targetLabel())
-				.append(")")
-				.append(",");
-		});
+		this.relationships.forEach(r -> sb.append("(:")
+			.append(r.sourceLabel())
+			.append(")-[:")
+			.append(r.type())
+			.append("]->(:")
+			.append(r.targetLabel())
+			.append(")")
+			.append(","));
 		return sb.deleteCharAt(sb.length() - 1).toString();
 	}
 

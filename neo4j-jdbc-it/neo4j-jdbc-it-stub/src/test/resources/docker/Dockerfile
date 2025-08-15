@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023-2024 "Neo4j,"
+# Copyright (c) 2023-2025 "Neo4j,"
 # Neo4j Sweden AB [https://neo4j.com]
 #
 # This file is part of Neo4j.
@@ -17,7 +17,7 @@
 # limitations under the License.
 #
 
-FROM python:3.10.0b4-buster
+FROM python:3.10-bookworm
 
 RUN apt-get update && apt-get install -y \
       apt-transport-https \

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -20,6 +20,7 @@ package org.neo4j.jdbc.docs;
 
 import java.io.InputStreamReader;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -42,6 +43,9 @@ public final class AuraGenAIExample {
 	private AuraGenAIExample() {
 	}
 
+	// This is about Sonar not realizing that var = 1 is very much not an object, but int.
+	// Also, I am very happy here to throw things from main
+	@SuppressWarnings({ "squid:S2275", "squid:S2096" })
 	public static void main(String... args) throws Exception {
 
 		var openAIToken = System.getenv("OPEN_AI_API_KEY");
@@ -51,7 +55,8 @@ public final class AuraGenAIExample {
 		}
 
 		// Getting a connection
-		try (var con = Neo4jDriver.withSQLTranslation()
+		try (@SuppressWarnings("deprecation")
+		var con = Neo4jDriver.withSQLTranslation()
 			.withProperties(Map.of("s2c.tableToLabelMappings", "genres:Genre"))
 			.fromEnv()
 			.orElseThrow()) {
@@ -214,8 +219,9 @@ public final class AuraGenAIExample {
 
 		var result = new ArrayList<Movie>();
 
-		try (var csvReader = new CSVReaderBuilder(new InputStreamReader(
-				Objects.requireNonNull(AuraGenAIExample.class.getResourceAsStream("/movies.csv"))))
+		try (var csvReader = new CSVReaderBuilder(
+				new InputStreamReader(Objects.requireNonNull(AuraGenAIExample.class.getResourceAsStream("/movies.csv")),
+						StandardCharsets.UTF_8))
 			.withSkipLines(1)
 			.build()) {
 			String[] nextRecord;

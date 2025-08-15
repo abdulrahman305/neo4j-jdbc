@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2023-2024 "Neo4j,"
+    Copyright (c) 2023-2025 "Neo4j,"
     Neo4j Sweden AB [https://neo4j.com]
 
     This file is part of Neo4j.
@@ -25,7 +25,7 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-parent</artifactId>
-		<version>6.0.2-SNAPSHOT</version>
+		<version>6.7.4-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>neo4j-jdbc-test-results</artifactId>
@@ -48,6 +48,14 @@
 		<dependency>
 			<groupId>org.neo4j</groupId>
 			<artifactId>neo4j-jdbc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-authn-kc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-authn-spi</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.neo4j</groupId>
@@ -75,7 +83,39 @@
 		</dependency>
 		<dependency>
 			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-it-sso</artifactId>
+			<version>${project.version}</version>
+			<classifier>tests</classifier>
+			<exclusions>
+				<exclusion>
+					<groupId>*</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-spring-boot-smoke-tests</artifactId>
+			<version>${project.version}</version>
+			<classifier>tests</classifier>
+			<exclusions>
+				<exclusion>
+					<groupId>*</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-tracing-micrometer</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
 			<artifactId>neo4j-jdbc-translator-impl</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.neo4j</groupId>
+			<artifactId>neo4j-jdbc-translator-spi</artifactId>
 		</dependency>
 	</dependencies>
 

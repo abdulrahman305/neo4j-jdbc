@@ -8,7 +8,7 @@ Michael Simons <michael.simons@neo4j.com>
 // tag::properties[]
 :groupId: org.neo4j
 :artifactIdCore: neo4j-jdbc
-:latest_version: 6.0.1
+:latest_version: 6.7.3
 :branch: main
 // end::properties[]
 :examplesdir: docs/src/main/asciidoc/modules/ROOT/examples
@@ -80,7 +80,7 @@ public final class Quickstart {
                 ORDER BY m.title
                 """;
 
-        var url = "jdbc:neo4j://localhost:7687";
+        var url = "jdbc:neo4j://localhost:7687/movies";
         var username = "neo4j";
         var password = "verysecret";
 
@@ -125,7 +125,7 @@ var query = """
         ORDER BY m.title
         """; // <.>
 
-var url = "jdbc:neo4j://localhost:7687?enableSQLTranslation=true";
+var url = "jdbc:neo4j://localhost:7687/movies?enableSQLTranslation=true";
 
 try (var con = DriverManager.getConnection(url, username, password);
         var stmt = con.createStatement();
@@ -166,7 +166,10 @@ To use it with a Neo4j cluster, server-side routing must be enabled on the clust
 * Implements `DatabaseMetaData` and `ResultSetMetaData` as fully as possible with a nearly schemaless database and general very flexible result sets, allowing for automatic metadata retrieval from ETL and ELT tools
 * Provides an https://en.wikipedia.org/wiki/Service_provider_interface[SPI] to hook in translators from SQL to Cypher
 * Provides an optional default implementation to translate many SQL statements into semantically similar Cypher statements
+* Supports client-side Cypher-backed views
 * Can be safely used with JDBC connection pools as opposed to the common Neo4j Java Driver or any JDBC driver based on that, as it doesn't do internal connection pooling and transaction management otherwise than dictated by the JDBC Spec
+* Built-in token based authentication, including reauthentication on token expiration plus an optiona Keycloak based SSO module
+* Built-in JSON based Object mapping
 
 The absence of any connection pooling and transaction management is an advantage of the Neo4j JDBC Driver over the common Neo4j Java Driver.
 It allows to pick and choose any database connection pooling system such as https://github.com/brettwooldridge/HikariCP[HikariCP] and transaction management such as https://jakarta.ee/specifications/transactions/[Jakarta Transactions].

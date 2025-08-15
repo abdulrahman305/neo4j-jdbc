@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -18,16 +18,16 @@
  */
 package org.neo4j.jdbc;
 
+import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.neo4j.jdbc.internal.bolt.response.PullResponse;
-import org.neo4j.jdbc.internal.bolt.response.RunResponse;
 import org.neo4j.jdbc.values.Record;
 import org.neo4j.jdbc.values.StringValue;
 import org.neo4j.jdbc.values.Type;
@@ -55,7 +55,7 @@ class ResultSetMetaDataImplTests {
 	void testResultSetMetadataGetSchema() throws SQLException {
 		try (var resultSet = setupWithValues(Collections.singletonList(Values.value(2)))) {
 			var rsMetadata = resultSet.getMetaData();
-			Assertions.assertThat(rsMetadata.getSchemaName(1)).isEqualTo("public");
+			Assertions.assertThat(rsMetadata.getSchemaName(1)).isEqualTo("private");
 		}
 	}
 
@@ -63,7 +63,15 @@ class ResultSetMetaDataImplTests {
 	void testResultSetMetadataGetCatalog() throws SQLException {
 		try (var resultSet = setupWithValues(Collections.singletonList(Values.value(2)))) {
 			var rsMetadata = resultSet.getMetaData();
-			Assertions.assertThat(rsMetadata.getCatalogName(1)).isEqualTo("");
+			Assertions.assertThat(rsMetadata.getCatalogName(1)).isEqualTo("Otto");
+		}
+	}
+
+	@Test
+	void testResultSetMetadataGetTable() throws SQLException {
+		try (var resultSet = setupWithValues(Collections.singletonList(Values.value(2)))) {
+			var rsMetadata = resultSet.getMetaData();
+			Assertions.assertThat(rsMetadata.getTableName(1)).isEqualTo("");
 		}
 	}
 
@@ -87,7 +95,7 @@ class ResultSetMetaDataImplTests {
 	void testResultSetMetadataGetInteger() throws SQLException {
 		try (var resultSet = setupWithValues(Collections.singletonList(Values.value(2)))) {
 			var rsMetadata = resultSet.getMetaData();
-			Assertions.assertThat(rsMetadata.getColumnType(1)).isEqualTo(Neo4jConversions.toSqlType(Type.INTEGER));
+			Assertions.assertThat(rsMetadata.getColumnType(1)).isEqualTo(Types.INTEGER);
 		}
 	}
 
@@ -135,13 +143,18 @@ class ResultSetMetaDataImplTests {
 
 		try (var resultSet = setupWithValues(List.of(Values.value(1), Values.value("String")))) {
 			var rsMetadata = resultSet.getMetaData();
-			Assertions.assertThat(rsMetadata.getColumnType(1)).isEqualTo(Neo4jConversions.toSqlType(Type.INTEGER));
+			Assertions.assertThat(rsMetadata.getColumnType(1)).isEqualTo(Types.INTEGER);
 		}
 	}
 
-	private ResultSet setupWithValues(List<Value> expectedValue) {
+	private ResultSet setupWithValues(List<Value> expectedValue) throws SQLException {
 		var statement = mock(StatementImpl.class);
-		var runResponse = mock(RunResponse.class);
+		var connection = mock(Connection.class);
+		given(connection.getSchema()).willReturn("private");
+		given(connection.getCatalog()).willReturn("Otto");
+		var runResponse = mock(Neo4jTransaction.RunResponse.class);
+
+		given(statement.getConnection()).willReturn(connection);
 
 		List<Record> boltRecords = new ArrayList<>();
 
@@ -155,7 +168,7 @@ class ResultSetMetaDataImplTests {
 			boltRecords.add(boltRecord);
 		}
 
-		var pullResponse = mock(PullResponse.class);
+		var pullResponse = mock(Neo4jTransaction.PullResponse.class);
 		given(pullResponse.records()).willReturn(boltRecords);
 
 		return new ResultSetImpl(statement, mock(Neo4jTransaction.class), runResponse, pullResponse, 1000, 0, 0);

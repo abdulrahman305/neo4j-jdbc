@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -36,10 +37,7 @@ public final class ListValue extends AbstractValue {
 	private final Value[] values;
 
 	ListValue(Value... values) {
-		if (values == null) {
-			throw new IllegalArgumentException("Cannot construct ListValue from null");
-		}
-		this.values = values;
+		this.values = Objects.requireNonNull(values, "Cannot construct ListValue from null");
 	}
 
 	@Override
@@ -49,12 +47,12 @@ public final class ListValue extends AbstractValue {
 
 	@Override
 	public List<Object> asObject() {
-		return asList(Values.ofObject());
+		return asList(Value::asObject);
 	}
 
 	@Override
 	public List<Object> asList() {
-		return list(this.values, Values.ofObject());
+		return list(this.values, Value::asObject);
 	}
 
 	@Override

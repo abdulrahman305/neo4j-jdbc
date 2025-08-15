@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -18,10 +18,16 @@
  */
 package org.neo4j.jdbc;
 
+import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.SQLException;
 import java.util.Collection;
 import java.util.Properties;
+import java.util.function.Supplier;
+
+import org.neo4j.jdbc.authn.spi.Authentication;
+import org.neo4j.jdbc.events.DriverListener;
+import org.neo4j.jdbc.tracing.Neo4jTracer;
 
 /**
  * Neo4j specific extensions to a {@link Driver}.
@@ -86,5 +92,61 @@ public sealed interface Neo4jDriverExtensions extends Driver, Neo4jMetadataWrite
 	 * @throws SQLException in all error cases
 	 */
 	void addBookmarks(String url, Properties info, Collection<Bookmark> bookmarks) throws SQLException;
+
+	/**
+	 * Adds a listener to this driver instance that gets notified when connections are
+	 * opened and closed.
+	 * @param driverListener the listener to add, must not be {@literal null}
+	 * @since 6.3.0
+	 */
+	void addListener(DriverListener driverListener);
+
+	/**
+	 * A call with a {@code tracer} that is not {@literal null} will enable tracing for
+	 * all connections spawned from this driver.
+	 * @param tracer the tracer to use, {@literal null} safe
+	 * @return this driver
+	 * @since 6.3.0
+	 * @deprecated use {@link #setTracer(Neo4jTracer)}
+	 */
+	@Deprecated(since = "6.6.0", forRemoval = true)
+	Neo4jDriver withTracer(Neo4jTracer tracer);
+
+	/**
+	 * Setting the {@code tracer} to a non {@literal null} value will enable tracing for
+	 * all connections spawned from this driver.
+	 * @param tracer the tracer to use, {@literal null} safe
+	 * @since 6.6.0
+	 */
+	void setTracer(Neo4jTracer tracer);
+
+	/**
+	 * Setting the {@code authenticationSupplier} to a non {@literal null} makes this
+	 * driver ignore all user and password information from the standard
+	 * {@link #connect(String, Properties) connect method} and give precedence to the
+	 * given supplier. A {@literal null} value resets the behaviour.
+	 * @param authenticationSupplier the authentication supplier to use
+	 * @since 6.6.0
+	 */
+	void setAuthenticationSupplier(Supplier<Authentication> authenticationSupplier);
+
+	/**
+	 * Creates a connection from this driver, using the provided authentication supplier,
+	 * ignoring both {@code user} and {@code password} properties from the JDBC
+	 * properties. If {@code provider} is {@literal null}, will behave just as usual and
+	 * try to find {@code user} and {@code password} keys inside the {@code info}
+	 * properties. Any globally configured authentication supplier will be ignored.
+	 * @param url the URL of the database to which to connect
+	 * @param authenticationSupplier the authentication supplier to use, maybe
+	 * {@literal null} in which case a global one will be attempted before the driver
+	 * looks up credentials from {@code info}
+	 * @param info a list of arbitrary string tag/value pairs as connection arguments.
+	 * Normally at least a "user" and "password" property should be included.
+	 * @return a {@code Connection} object that represents a connection to the URL
+	 * @throws SQLException if a database access error occurs or the url is {@code null}
+	 * @since 6.6.0
+	 */
+	Connection connect(String url, Properties info, Supplier<Authentication> authenticationSupplier)
+			throws SQLException;
 
 }

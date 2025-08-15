@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -22,10 +22,12 @@ import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -39,8 +41,9 @@ public class MovieController {
 	}
 
 	@GetMapping
-	public List<Movie> getMovies() {
-		return this.movieRepository.findAll();
+	public List<Movie> getMovies(@RequestParam(defaultValue = "false") boolean fail) {
+
+		return this.movieRepository.findAll(fail);
 	}
 
 	@PostMapping
@@ -48,6 +51,11 @@ public class MovieController {
 		var movie = new Movie(title);
 		var result = this.movieRepository.createOrUpdate(movie);
 		return new ResponseEntity<>(movie, (result == 0) ? HttpStatus.OK : HttpStatus.CREATED);
+	}
+
+	@DeleteMapping
+	public void deleteAll() {
+		this.movieRepository.deleteAll();
 	}
 
 }

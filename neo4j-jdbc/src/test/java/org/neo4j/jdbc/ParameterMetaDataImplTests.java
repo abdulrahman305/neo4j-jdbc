@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -38,7 +38,7 @@ class ParameterMetaDataImplTests {
 
 	@Test
 	void shouldHaveNoParameterCount() {
-		this.metaData = new ParameterMetaDataImpl();
+		this.metaData = new ParameterMetaDataImpl(0);
 
 		assertThat(this.metaData.getParameterCount()).isEqualTo(0);
 	}
@@ -47,7 +47,7 @@ class ParameterMetaDataImplTests {
 	@MethodSource("getUnwrapArgs")
 	void shouldUnwrap(Class<?> cls, boolean shouldUnwrap) throws SQLException {
 		// given
-		this.metaData = new ParameterMetaDataImpl();
+		this.metaData = new ParameterMetaDataImpl(0);
 
 		// when & then
 		if (shouldUnwrap) {
@@ -61,9 +61,9 @@ class ParameterMetaDataImplTests {
 
 	@ParameterizedTest
 	@MethodSource("getUnwrapArgs")
-	void shouldHandleIsWrapperFor(Class<?> cls, boolean shouldUnwrap) throws SQLException {
+	void shouldHandleIsWrapperFor(Class<?> cls, boolean shouldUnwrap) {
 		// given
-		this.metaData = new ParameterMetaDataImpl();
+		this.metaData = new ParameterMetaDataImpl(0);
 
 		// when
 		var wrapperFor = this.metaData.isWrapperFor(cls);

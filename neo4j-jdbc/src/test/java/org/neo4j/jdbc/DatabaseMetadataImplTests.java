@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,8 +19,14 @@
 package org.neo4j.jdbc;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -28,8 +34,13 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.neo4j.jdbc.internal.bolt.BoltConnection;
-import org.neo4j.jdbc.internal.bolt.BoltConnectionProvider;
+import org.neo4j.bolt.connection.BoltConnection;
+import org.neo4j.bolt.connection.BoltConnectionProvider;
+import org.neo4j.bolt.connection.BoltConnectionProviderFactory;
+import org.neo4j.bolt.connection.LoggingProvider;
+import org.neo4j.bolt.connection.MetricsListener;
+import org.neo4j.bolt.connection.values.ValueFactory;
+import org.neo4j.jdbc.values.Type;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -49,20 +60,27 @@ class DatabaseMetadataImplTests {
 		CompletableFuture<BoltConnection> boltConnectionCompletableFuture = mock();
 		given(boltConnectionCompletableFuture.join()).willReturn(mock());
 		given(mockedFuture.toCompletableFuture()).willReturn(boltConnectionCompletableFuture);
-		given(this.boltConnectionProvider.connect(any(), any(), any(), any(), any(), any(), anyInt()))
+		given(this.boltConnectionProvider.connect(any(), any(), any(), any(), anyInt(), any(), any(), any(), any()))
 			.willReturn(mockedFuture);
 	}
 
 	@Test
+	void parameterResultSetShouldWork() throws SQLException {
+		var map = new LinkedHashMap<String, Object>();
+		map.put("1", "a");
+		map.put("2", "b");
+		map.put("3", "c");
+		var rs = DatabaseMetadataImpl.resultSetForParameters(mock(ConnectionImpl.class), map);
+		var meta = rs.getMetaData();
+		assertThat(meta.getColumnCount()).isEqualTo(3);
+		for (int i = 0; i < meta.getColumnCount(); ++i) {
+			assertThat(meta.getColumnLabel(i + 1)).isEqualTo(Integer.toString(i + 1));
+		}
+	}
+
+	@Test
 	void getProcedureNamesShouldFailIfYouPassSchema() throws SQLException {
-		var url = "jdbc:neo4j://host";
-
-		var driver = new Neo4jDriver(this.boltConnectionProvider);
-		var props = new Properties();
-		props.put("username", "test");
-		props.put("password", "password");
-
-		var connection = driver.connect(url, props);
+		var connection = newConnection();
 
 		var metaData = connection.getMetaData();
 		assertThatExceptionOfType(SQLException.class)
@@ -84,7 +102,7 @@ class DatabaseMetadataImplTests {
 		var databaseMetadata = newDatabaseMetadata();
 		Assertions.assertThatIllegalArgumentException()
 			.isThrownBy(databaseMetadata::getDriverMajorVersion)
-			.withMessage("Unsupported or unknown version 'unknown'");
+			.withMessage("Unsupported or unknown version 'dev'");
 	}
 
 	@Test
@@ -92,7 +110,7 @@ class DatabaseMetadataImplTests {
 		var databaseMetadata = newDatabaseMetadata();
 		Assertions.assertThatIllegalArgumentException()
 			.isThrownBy(databaseMetadata::getDriverMinorVersion)
-			.withMessage("Unsupported or unknown version 'unknown'");
+			.withMessage("Unsupported or unknown version 'dev'");
 	}
 
 	@Test
@@ -110,19 +128,13 @@ class DatabaseMetadataImplTests {
 	@Test
 	void getTableTypes() throws SQLException {
 		var databaseMetadata = newDatabaseMetadata();
-		try (var tableTypes = databaseMetadata.getTableTypes()) {
-			assertThat(tableTypes.next()).isTrue();
-			assertThat(tableTypes.getString(1)).isEqualTo("TABLE");
-			assertThat(tableTypes.next()).isFalse();
+		var tableTypes = new ArrayList<String>();
+		try (var rs = databaseMetadata.getTableTypes()) {
+			while (rs.next()) {
+				tableTypes.add(rs.getString("TABLE_TYPE"));
+			}
 		}
-	}
-
-	@Test
-	void getPrimaryKeysShouldReturnEmptyResultSet() throws SQLException {
-		var databaseMetadata = newDatabaseMetadata();
-		try (var tableTypes = databaseMetadata.getPrimaryKeys(null, "public", "someTableDoesNotMatter")) {
-			assertThat(tableTypes.next()).isFalse();
-		}
+		assertThat(tableTypes).containsExactlyInAnyOrder("CBV", "TABLE", "RELATIONSHIP");
 	}
 
 	@Test
@@ -171,14 +183,7 @@ class DatabaseMetadataImplTests {
 
 	@Test
 	void getAllTablesShouldErrorIfYouPassNonPublicSchema() throws SQLException {
-		var url = "jdbc:neo4j://host";
-
-		var driver = new Neo4jDriver(this.boltConnectionProvider);
-		var props = new Properties();
-		props.put("username", "test");
-		props.put("password", "password");
-
-		var connection = driver.connect(url, props);
+		var connection = newConnection();
 
 		assertThatExceptionOfType(SQLException.class)
 			.isThrownBy(() -> connection.getMetaData().getTables(null, "NotNull", null, null));
@@ -186,25 +191,131 @@ class DatabaseMetadataImplTests {
 
 	@Test
 	void getAllTablesShouldErrorIfYouPassCatalog() throws SQLException {
+		var connection = newConnection();
+
+		assertThatExceptionOfType(SQLException.class)
+			.isThrownBy(() -> connection.getMetaData().getTables("NotNull", null, null, null))
+			.withMessage(
+					"general processing exception - Catalog 'NotNull' is not available in this Neo4j instance, please leave blank or specify the current database name");
+
+		assertThatExceptionOfType(SQLException.class)
+			.isThrownBy(() -> connection.getMetaData().getTables("NotNull", "public", null, null))
+			.withMessage(
+					"general processing exception - Catalog 'NotNull' is not available in this Neo4j instance, please leave blank or specify the current database name");
+	}
+
+	@Test
+	void getCatalogTermShouldWork() throws SQLException {
+
+		var connection = newConnection();
+		assertThat(connection.getMetaData().getCatalogTerm()).isEqualTo("database");
+	}
+
+	@Test
+	void getCatalogSeparatorShouldWork() throws SQLException {
+
+		var connection = newConnection();
+		assertThat(connection.getMetaData().getCatalogSeparator()).isEqualTo(".");
+	}
+
+	@Test
+	void getTypeInfoShouldWork() throws SQLException {
+		var connection = newConnection();
+		try (var rs = connection.getMetaData().getTypeInfo()) {
+			while (rs.next()) {
+				var type = Type.valueOf(rs.getString("TYPE_NAME"));
+				assertThat(rs.getInt("DATA_TYPE")).isEqualTo(Neo4jConversions.toSqlType(type));
+				var mp = switch (type) {
+					case NUMBER, INTEGER -> 19;
+					case FLOAT -> 15;
+					default -> 0;
+				};
+				assertThat(rs.getInt("PRECISION")).isEqualTo(mp);
+				assertThat(rs.getString("LITERAL_PREFIX")).isNull();
+				assertThat(rs.getString("LITERAL_SUFFIX")).isNull();
+				assertThat(rs.getString("CREATE_PARAMS")).isNull();
+				assertThat(rs.getInt("NULLABLE")).isEqualTo(DatabaseMetaData.typeNullable);
+				assertThat(rs.getBoolean("CASE_SENSITIVE")).isEqualTo(type == Type.STRING);
+				var sb = switch (type) {
+					case RELATIONSHIP -> DatabaseMetaData.typePredNone;
+					case STRING -> DatabaseMetaData.typeSearchable;
+					default -> DatabaseMetaData.typePredBasic;
+				};
+				assertThat(rs.getInt("SEARCHABLE")).isEqualTo(sb);
+				assertThat(rs.getBoolean("UNSIGNED_ATTRIBUTE")).isEqualTo(false);
+				assertThat(rs.getBoolean("FIXED_PREC_SCALE")).isEqualTo(false);
+				assertThat(rs.getBoolean("AUTO_INCREMENT")).isEqualTo(false);
+				assertThat(rs.getShort("MINIMUM_SCALE")).isEqualTo((short) 0);
+				assertThat(rs.wasNull()).isTrue();
+				assertThat(rs.getShort("MAXIMUM_SCALE")).isEqualTo((short) 0);
+				assertThat(rs.wasNull()).isTrue();
+
+				assertThat(rs.getInt("SQL_DATA_TYPE")).isZero();
+				assertThat(rs.wasNull()).isTrue();
+				assertThat(rs.getInt("SQL_DATETIME_SUB")).isZero();
+				assertThat(rs.wasNull()).isTrue();
+
+				assertThat(rs.getInt("NUM_PREC_RADIX")).isEqualTo(10);
+			}
+		}
+	}
+
+	@Test
+	void getClientInfoPropertiesShouldWork() throws SQLException {
+		var connection = newConnection();
+		var maxLen = (int) Math.pow(2, 16);
+		try (var rs = connection.getMetaData().getClientInfoProperties()) {
+			assertThat(rs.next()).isTrue();
+			assertThat(rs.getString("NAME")).isEqualTo("ApplicationName");
+			assertThat(rs.getInt("MAX_LEN")).isEqualTo(maxLen);
+			assertThat(rs.getString("DEFAULT_VALUE")).isNull();
+			assertThat(rs.getString("DESCRIPTION")).isNotNull();
+			assertThat(rs.next()).isTrue();
+			assertThat(rs.getString("NAME")).isEqualTo("ClientUser");
+			assertThat(rs.getInt("MAX_LEN")).isEqualTo(maxLen);
+			assertThat(rs.getString("DESCRIPTION")).isNotNull();
+			assertThat(rs.next()).isTrue();
+			assertThat(rs.getString("NAME")).isEqualTo("ClientHostname");
+			assertThat(rs.getInt("MAX_LEN")).isEqualTo(maxLen);
+			assertThat(rs.getString("DESCRIPTION")).isNotNull();
+			assertThat(rs.next()).isFalse();
+		}
+
+		connection.setClientInfo("ApplicationName", "a unit test");
+		assertThat(connection.getClientInfo("ApplicationName")).isEqualTo("a unit test");
+	}
+
+	private Connection newConnection() throws SQLException {
 		var url = "jdbc:neo4j://host";
 
-		var driver = new Neo4jDriver(this.boltConnectionProvider);
+		var driver = new Neo4jDriver(List.of(new BoltConnectionProviderFactory() {
+			@Override
+			public boolean supports(String s) {
+				return true;
+			}
+
+			@Override
+			public BoltConnectionProvider create(LoggingProvider loggingProvider, ValueFactory valueFactory,
+					MetricsListener metricsListener, Map<String, ?> map) {
+				return DatabaseMetadataImplTests.this.boltConnectionProvider;
+			}
+		}));
 		var props = new Properties();
 		props.put("username", "test");
 		props.put("password", "password");
 
-		var connection = driver.connect(url, props);
-
-		assertThatExceptionOfType(SQLException.class)
-			.isThrownBy(() -> connection.getMetaData().getTables("NotNull", null, null, null));
-
-		assertThatExceptionOfType(SQLException.class)
-			.isThrownBy(() -> connection.getMetaData().getTables("NotNull", "public", null, null));
+		return driver.connect(url, props);
 	}
 
 	static DatabaseMetadataImpl newDatabaseMetadata() {
-		var connection = Mockito.mock(Connection.class);
-		return new DatabaseMetadataImpl(connection, (s) -> mock(Neo4jTransaction.class), false);
+		var connection = Mockito.mock(ConnectionImpl.class);
+		try {
+			given(connection.getTransaction(any())).willReturn(mock(Neo4jTransaction.class));
+		}
+		catch (SQLException ex) {
+			throw new RuntimeException(ex);
+		}
+		return new DatabaseMetadataImpl(connection, false, 1000, Set.of());
 	}
 
 }

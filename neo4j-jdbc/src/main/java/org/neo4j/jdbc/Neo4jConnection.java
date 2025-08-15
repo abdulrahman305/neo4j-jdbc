@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -18,9 +18,13 @@
  */
 package org.neo4j.jdbc;
 
+import java.net.URI;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.concurrent.Executor;
+
+import org.neo4j.jdbc.events.ConnectionListener;
+import org.neo4j.jdbc.tracing.Neo4jTracer;
 
 /**
  * A Neo4j specific extension of {@link Connection}. It may be referred to for use with
@@ -86,5 +90,39 @@ public sealed interface Neo4jConnection extends Connection, Neo4jMetadataWriter 
 	 * @return the name of the database for this connection
 	 */
 	String getDatabaseName();
+
+	/**
+	 * Adds a listener to this connection that gets notified when statements are created
+	 * and closed.
+	 * @param connectionListener the listener to add, must not be {@literal null}
+	 * @since 6.3.0
+	 */
+	void addListener(ConnectionListener connectionListener);
+
+	/**
+	 * The database URL this connection is connected to.
+	 * @return the database URL this connection is connected to
+	 * @since 6.3.0
+	 */
+	URI getDatabaseURL();
+
+	/**
+	 * A call with a {@code tracer} that is not {@literal null} will enable tracing for
+	 * this connection.
+	 * @param tracer the tracer to use, {@literal null} safe
+	 * @return this connection
+	 * @since 6.3.0
+	 * @deprecated use {@link #setTracer(Neo4jTracer)}
+	 */
+	@Deprecated(since = "6.6.0", forRemoval = true)
+	Neo4jConnection withTracer(Neo4jTracer tracer);
+
+	/**
+	 * Setting the {@code tracer} to a non {@literal null} value will enable tracing for
+	 * this connection.
+	 * @param tracer the tracer to use, {@literal null} safe
+	 * @since 6.6.0
+	 */
+	void setTracer(Neo4jTracer tracer);
 
 }

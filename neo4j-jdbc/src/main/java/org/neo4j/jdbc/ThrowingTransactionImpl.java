@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -22,11 +22,17 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.Map;
 
-import org.neo4j.jdbc.internal.bolt.response.DiscardResponse;
-import org.neo4j.jdbc.internal.bolt.response.PullResponse;
-import org.neo4j.jdbc.internal.bolt.response.RunResponse;
+import org.neo4j.jdbc.Neo4jException.GQLError;
 
+/**
+ * Will throw on anything modifying run and pull responses, default to no-op for
+ * commiting, failing and rollback.
+ *
+ * @author Neo4j Drivers Team
+ */
 final class ThrowingTransactionImpl implements Neo4jTransaction {
+
+	private State state = State.READY;
 
 	@Override
 	public RunAndPullResponses runAndPull(String query, Map<String, Object> parameters, int fetchSize, int timeout)
@@ -47,17 +53,29 @@ final class ThrowingTransactionImpl implements Neo4jTransaction {
 
 	@Override
 	public void commit() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		if (this.state != State.READY) {
+			throw new Neo4jException(
+					GQLError.$2DN01.withTemplatedMessage("Cannot commit in %s state".formatted(this.state)));
+		}
+		this.state = State.COMMITTED;
 	}
 
 	@Override
 	public void rollback() throws SQLException {
-		throw new SQLFeatureNotSupportedException();
+		if (this.state != State.READY) {
+			throw new Neo4jException(
+					GQLError.$40N01.withTemplatedMessage("Cannot rollback in %s state".formatted(this.state)));
+		}
+		this.state = State.ROLLEDBACK;
 	}
 
 	@Override
-	public void fail(SQLException exception) {
-
+	public void fail(SQLException exception) throws SQLException {
+		if (this.state != State.READY) {
+			throw new Neo4jException(
+					GQLError.$2DN03.withTemplatedMessage("Cannot fail in %s state".formatted(this.state)));
+		}
+		this.state = State.FAILED;
 	}
 
 	@Override
@@ -67,7 +85,7 @@ final class ThrowingTransactionImpl implements Neo4jTransaction {
 
 	@Override
 	public State getState() {
-		return State.ROLLEDBACK;
+		return this.state;
 	}
 
 }

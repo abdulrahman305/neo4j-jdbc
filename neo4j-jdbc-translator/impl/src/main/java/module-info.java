@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -25,6 +25,7 @@ import org.neo4j.jdbc.translator.spi.TranslatorFactory;
 module org.neo4j.jdbc.translator.impl {
 	provides TranslatorFactory with SqlToCypherTranslatorFactory;
 
+	requires com.fasterxml.jackson.jr.ob;
 	requires org.neo4j.jdbc.translator.spi;
 	requires org.jooq;
 	requires org.neo4j.cypherdsl.core;

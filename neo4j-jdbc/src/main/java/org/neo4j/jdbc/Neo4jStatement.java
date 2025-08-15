@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -20,6 +20,8 @@ package org.neo4j.jdbc;
 
 import java.sql.Statement;
 
+import org.neo4j.jdbc.events.StatementListener;
+
 /**
  * A Neo4j specific extension of a {@link java.sql.Statement}. It may be referred to for
  * use with {@link #unwrap(Class)} to access specific Neo4j functionality.
@@ -33,5 +35,13 @@ public sealed interface Neo4jStatement extends Statement, Neo4jMetadataWriter pe
 	 * The default (Bolt) fetch size that is used.
 	 */
 	int DEFAULT_FETCH_SIZE = 1000;
+
+	/**
+	 * Adds a listener to this statement that gets notified on starts and finish of
+	 * executions.
+	 * @param statementListener the listener to add, must not be {@literal null}
+	 * @since 6.3.0
+	 */
+	void addListener(StatementListener statementListener);
 
 }

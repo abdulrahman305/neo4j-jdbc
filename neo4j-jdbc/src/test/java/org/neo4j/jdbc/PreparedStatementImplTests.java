@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -22,9 +22,9 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Connection;
@@ -63,11 +63,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.neo4j.jdbc.internal.bolt.response.DiscardResponse;
-import org.neo4j.jdbc.internal.bolt.response.PullResponse;
-import org.neo4j.jdbc.internal.bolt.response.ResultSummary;
-import org.neo4j.jdbc.internal.bolt.response.RunResponse;
-import org.neo4j.jdbc.internal.bolt.response.SummaryCounters;
+import org.neo4j.bolt.connection.SummaryCounters;
 import org.neo4j.jdbc.values.Value;
 import org.neo4j.jdbc.values.Values;
 
@@ -87,6 +83,7 @@ class PreparedStatementImplTests {
 			textBlock = """
 					MATCH statement RETURN same WHERE thereAreNoPlaceholders|MATCH statement RETURN same WHERE thereAreNoPlaceholders
 					MATCH statement RETURN same WHERE thereIsAPlaceholder = ?|MATCH statement RETURN same WHERE thereIsAPlaceholder = $1
+					MATCH statement RETURN same WHERE thereIsAPlaceholder = '?'|MATCH statement RETURN same WHERE thereIsAPlaceholder = '?'
 					MATCH statement RETURN same WHERE thereIsAPlaceholder = ? AND another = ?|MATCH statement RETURN same WHERE thereIsAPlaceholder = $1 AND another = $2
 					MATCH statement RETURN same WHERE thisIs = "a string ?" AND thereIsAPlaceholder = ? AND another = ? AND notInString = "shall I replace this?"|MATCH statement RETURN same WHERE thisIs = "a string ?" AND thereIsAPlaceholder = $1 AND another = $2 AND notInString = "shall I replace this?"
 					MATCH statement RETURN same WHERE thereIsAPlaceholder = ? <NL>AND newLinePar = ?|MATCH statement RETURN same WHERE thereIsAPlaceholder = $1 <NL>AND newLinePar = $2
@@ -104,13 +101,13 @@ class PreparedStatementImplTests {
 		var query = "query";
 		var transactionSupplier = mock(Neo4jTransactionSupplier.class);
 		var transaction = mock(Neo4jTransaction.class);
-		var runResponse = mock(RunResponse.class);
-		var pullResponse = mock(PullResponse.class);
+		var runResponse = mock(Neo4jTransaction.RunResponse.class);
+		var pullResponse = mock(Neo4jTransaction.PullResponse.class);
 		given(transactionSupplier.getTransaction(any())).willReturn(transaction);
 		given(transactionSupplier.getTransaction(any())).willReturn(transaction);
 		given(transaction.runAndPull(query, Collections.emptyMap(), StatementImpl.DEFAULT_FETCH_SIZE, 0))
 			.willReturn(new Neo4jTransaction.RunAndPullResponses(runResponse, pullResponse));
-		this.statement = newStatement(mock(Connection.class), transactionSupplier, query);
+		this.statement = newStatement(StatementImplTests.mockConnection(), transactionSupplier, query);
 
 		// when
 		var resultSet = this.statement.executeQuery();
@@ -126,26 +123,26 @@ class PreparedStatementImplTests {
 
 	private static PreparedStatementImpl newStatement(Connection connection,
 			Neo4jTransactionSupplier transactionSupplier, String query) {
-		return new PreparedStatementImpl(connection, transactionSupplier, null, null, false, query);
+		return new PreparedStatementImpl(connection, transactionSupplier, null, null, null, false, false, query);
 	}
 
 	@Test
 	void shouldExecuteUpdate() throws SQLException {
 		// given
 		var query = "query";
-		var discardResponse = mock(DiscardResponse.class);
+		var discardResponse = mock(Neo4jTransaction.DiscardResponse.class);
 		var transactionSupplier = mock(Neo4jTransactionSupplier.class);
 		var transaction = mock(Neo4jTransaction.class);
 		given(transactionSupplier.getTransaction(any())).willReturn(transaction);
 		given(transaction.isAutoCommit()).willReturn(true);
 		given(transaction.runAndDiscard(query, Collections.emptyMap(), 0, true)).willReturn(discardResponse);
-		var response = mock(ResultSummary.class);
+		var response = mock(Neo4jTransaction.ResultSummary.class);
 		given(discardResponse.resultSummary()).willReturn(Optional.of(response));
 		var counters = mock(SummaryCounters.class);
 		given(response.counters()).willReturn(counters);
 		var totalUpdates = 5;
 		given(counters.nodesCreated()).willReturn(totalUpdates);
-		this.statement = newStatement(mock(Connection.class), transactionSupplier, query);
+		this.statement = newStatement(StatementImplTests.mockConnection(), transactionSupplier, query);
 
 		// when
 		var updates = this.statement.executeUpdate();
@@ -166,18 +163,18 @@ class PreparedStatementImplTests {
 		var transaction = mock(Neo4jTransaction.class);
 		given(transactionSupplier.getTransaction(any())).willReturn(transaction);
 		given(transaction.isAutoCommit()).willReturn(true);
-		var runResponse = mock(RunResponse.class);
-		var pullResponse = mock(PullResponse.class);
+		var runResponse = mock(Neo4jTransaction.RunResponse.class);
+		var pullResponse = mock(Neo4jTransaction.PullResponse.class);
 		given(transaction.runAndPull(query, Collections.emptyMap(), StatementImpl.DEFAULT_FETCH_SIZE, 0))
 			.willReturn(new Neo4jTransaction.RunAndPullResponses(runResponse, pullResponse));
 		given(transaction.isRunnable()).willReturn(true);
-		var resultSummary = mock(ResultSummary.class);
+		var resultSummary = mock(Neo4jTransaction.ResultSummary.class);
 		given(pullResponse.resultSummary()).willReturn(Optional.of(resultSummary));
 		var summaryCounters = mock(SummaryCounters.class);
 		given(resultSummary.counters()).willReturn(summaryCounters);
 		given(summaryCounters.totalCount()).willReturn(0);
 		given(pullResponse.records()).willReturn(Collections.emptyList());
-		this.statement = newStatement(mock(Connection.class), transactionSupplier, query);
+		this.statement = newStatement(StatementImplTests.mockConnection(), transactionSupplier, query);
 
 		// when
 		var hasResultSet = this.statement.execute();
@@ -205,14 +202,15 @@ class PreparedStatementImplTests {
 
 	@Test
 	void shouldBePoolableByDefault() throws SQLException {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "");
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class), "");
 		assertThat(this.statement.isPoolable()).isTrue();
 	}
 
 	@ParameterizedTest
 	@MethodSource("getShouldThrowWhenClosedArgs")
 	void shouldThrowWhenClosed(StatementMethodRunner consumer) throws SQLException {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 		this.statement.close();
 		assertThat(this.statement.isClosed()).isTrue();
 		assertThatThrownBy(() -> consumer.run(this.statement)).isInstanceOf(SQLException.class);
@@ -288,9 +286,11 @@ class PreparedStatementImplTests {
 
 	@ParameterizedTest
 	@MethodSource("getShouldThrowUnsupportedArgs")
-	void shouldThrowUnsupported(StatementMethodRunner consumer, Class<? extends SQLException> exceptionType) {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
-		assertThatThrownBy(() -> consumer.run(this.statement)).isExactlyInstanceOf(exceptionType);
+	void shouldThrowUnsupported(StatementMethodRunner consumer, Class<? extends SQLException> exceptionType)
+			throws SQLException {
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
+		assertThatThrownBy(() -> consumer.run(this.statement)).isInstanceOf(exceptionType);
 	}
 
 	static Stream<Arguments> getShouldThrowUnsupportedArgs() {
@@ -311,12 +311,6 @@ class PreparedStatementImplTests {
 				Arguments.of((StatementMethodRunner) statement -> statement.setBlob(1, mock(Blob.class)),
 						SQLFeatureNotSupportedException.class),
 				Arguments.of((StatementMethodRunner) statement -> statement.setClob(1, mock(Clob.class)),
-						SQLFeatureNotSupportedException.class),
-				Arguments.of((StatementMethodRunner) statement -> statement.setArray(1, mock(Array.class)),
-						SQLFeatureNotSupportedException.class),
-				Arguments.of((StatementMethodRunner) statement -> statement.setNull(1, Types.NULL, "name"),
-						SQLFeatureNotSupportedException.class),
-				Arguments.of((StatementMethodRunner) statement -> statement.setURL(1, mock(URL.class)),
 						SQLFeatureNotSupportedException.class),
 				Arguments.of((StatementMethodRunner) statement -> statement.setRowId(1, mock(RowId.class)),
 						SQLFeatureNotSupportedException.class),
@@ -342,9 +336,10 @@ class PreparedStatementImplTests {
 
 	@ParameterizedTest
 	@MethodSource("getShouldThrowOnExplicitlyProhibitedMethodsArgs")
-	void shouldThrowOnExplicitlyProhibitedMethods(StatementMethodRunner consumer) {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
-		assertThatThrownBy(() -> consumer.run(this.statement)).isExactlyInstanceOf(SQLException.class);
+	void shouldThrowOnExplicitlyProhibitedMethods(StatementMethodRunner consumer) throws SQLException {
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
+		assertThatThrownBy(() -> consumer.run(this.statement)).isExactlyInstanceOf(Neo4jException.class);
 	}
 
 	static Stream<Arguments> getShouldThrowOnExplicitlyProhibitedMethodsArgs() {
@@ -370,9 +365,10 @@ class PreparedStatementImplTests {
 
 	@ParameterizedTest
 	@MethodSource("getShouldThrowOnInvalidParameterIndexArgs")
-	void shouldThrowOnInvalidParameterIndex(StatementMethodRunner consumer) {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
-		assertThatThrownBy(() -> consumer.run(this.statement)).isExactlyInstanceOf(SQLException.class);
+	void shouldThrowOnInvalidParameterIndex(StatementMethodRunner consumer) throws SQLException {
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
+		assertThatThrownBy(() -> consumer.run(this.statement)).isExactlyInstanceOf(Neo4jException.class);
 	}
 
 	static Stream<Arguments> getShouldThrowOnInvalidParameterIndexArgs() {
@@ -411,16 +407,18 @@ class PreparedStatementImplTests {
 	}
 
 	@ParameterizedTest
-	@MethodSource("getShouldSetParameterArgs")
-	void shouldSetParameter(StatementMethodRunner parameterSettingRunner, Value expectedValue) throws SQLException {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+	@MethodSource
+	void shouldSetParameter(StatementMethodRunner parameterSettingRunner, Value expectedValue)
+			throws SQLException, MalformedURLException {
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 
 		parameterSettingRunner.run(this.statement);
 
 		assertThat(this.statement.getCurrentBatch()).isEqualTo(Map.of("1", expectedValue));
 	}
 
-	static Stream<Arguments> getShouldSetParameterArgs() {
+	static Stream<Arguments> shouldSetParameter() {
 
 		var zoneId = ZoneId.of("America/Los_Angeles");
 		var offset = zoneId.getRules().getOffset(Instant.now());
@@ -428,6 +426,8 @@ class PreparedStatementImplTests {
 		return Stream.of(
 				Arguments.of((StatementMethodRunner) statement -> statement.setNull(1, Types.NULL), Values.NULL),
 				Arguments.of((StatementMethodRunner) statement -> statement.setBoolean(1, true), Values.value(true)),
+				Arguments.of((StatementMethodRunner) statement -> statement.setURL(1, new URL("https://neo4j.com")),
+						Values.value("https://neo4j.com")),
 				Arguments.of((StatementMethodRunner) statement -> statement.setBoolean(1, false), Values.value(false)),
 				Arguments.of((StatementMethodRunner) statement -> statement.setByte(1, (byte) 1),
 						Values.value((byte) 1)),
@@ -504,7 +504,8 @@ class PreparedStatementImplTests {
 	@ParameterizedTest
 	@MethodSource("getShouldSetObjectParameterArgs")
 	void shouldSetObjectParameter(Object object, Value expectedValue) throws SQLException {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 
 		this.statement.setObject(1, object);
 
@@ -526,7 +527,8 @@ class PreparedStatementImplTests {
 
 	@Test
 	void shouldClearParameters() throws SQLException {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 		this.statement.setBoolean(1, true);
 
 		this.statement.clearParameters();
@@ -535,8 +537,9 @@ class PreparedStatementImplTests {
 	}
 
 	@Test
-	void shouldReturnParameterMetaData() {
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+	void shouldReturnParameterMetaData() throws SQLException {
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 
 		var metaData = this.statement.getParameterMetaData();
 
@@ -547,7 +550,8 @@ class PreparedStatementImplTests {
 	@MethodSource("getUnwrapArgs")
 	void shouldUnwrap(Class<?> cls, boolean shouldUnwrap) throws SQLException {
 		// given
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 
 		// when & then
 		if (shouldUnwrap) {
@@ -561,9 +565,10 @@ class PreparedStatementImplTests {
 
 	@ParameterizedTest
 	@MethodSource("getUnwrapArgs")
-	void shouldHandleIsWrapperFor(Class<?> cls, boolean shouldUnwrap) {
+	void shouldHandleIsWrapperFor(Class<?> cls, boolean shouldUnwrap) throws SQLException {
 		// given
-		this.statement = newStatement(mock(Connection.class), mock(Neo4jTransactionSupplier.class), "query");
+		this.statement = newStatement(StatementImplTests.mockConnection(), mock(Neo4jTransactionSupplier.class),
+				"query");
 
 		// when
 		var wrapperFor = this.statement.isWrapperFor(cls);
@@ -582,7 +587,7 @@ class PreparedStatementImplTests {
 	@FunctionalInterface
 	private interface StatementMethodRunner {
 
-		void run(PreparedStatementImpl statement) throws SQLException;
+		void run(PreparedStatementImpl statement) throws SQLException, MalformedURLException;
 
 	}
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,6 +19,8 @@
 package org.neo4j.jdbc.translator.spi;
 
 import java.sql.DatabaseMetaData;
+import java.util.Set;
+import java.util.logging.Logger;
 
 /**
  * This is an SPI interface to be implemented by tooling that is able to translate queries
@@ -53,6 +55,11 @@ import java.sql.DatabaseMetaData;
  */
 @FunctionalInterface
 public interface Translator {
+
+	/**
+	 * Shared logger for all translators.
+	 */
+	Logger LOGGER = Logger.getLogger("org.neo4j.jdbc.translator");
 
 	/**
 	 * Useful constant for the highest precedence value.
@@ -118,6 +125,20 @@ public interface Translator {
 	 */
 	default int getOrder() {
 		return LOWEST_PRECEDENCE;
+	}
+
+	/**
+	 * A translator might support a set of Cypher-backed views (CBVs), that the translator
+	 * is able to recognize in statements that it can translate. How the views are
+	 * configured inside the translator is up to each implementation, they might be
+	 * static, they might be configurable via external resources. All views of all
+	 * translators configured will be taken into account for {@link DatabaseMetaData},
+	 * hence view names must be unique for an instance of the Neo4j-JDBC driver.
+	 * @return a set of {@link View views} that are supported by this translator
+	 * @since 6.5.0
+	 */
+	default Set<View> getViews() {
+		return Set.of();
 	}
 
 }

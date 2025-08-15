@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 "Neo4j,"
+ * Copyright (c) 2023-2025 "Neo4j,"
  * Neo4j Sweden AB [https://neo4j.com]
  *
  * This file is part of Neo4j.
@@ -19,33 +19,87 @@
 package org.neo4j.jdbc.it.cp;
 
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIf;
+import org.junit.jupiter.params.Parameter;
+import org.junit.jupiter.params.ParameterizedClass;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.neo4j.jdbc.Neo4jConnection;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-public class ConnectionIT extends IntegrationTestBase {
+@ParameterizedClass
+@MethodSource("allProtocols")
+class ConnectionIT extends IntegrationTestBase {
+
+	@Parameter
+	String protocol = "neo4j";
 
 	@Test
 	void shouldCheckTXStateBeforeCommit() throws SQLException {
+		var handler = new CapturingHandler();
+		Logger.getLogger("org.neo4j.jdbc.connection").addHandler(handler);
 		try (var connection = getConnection()) {
-			assertThatExceptionOfType(SQLException.class).isThrownBy(connection::commit)
-				.withMessage("There is no transaction to commit");
+			assertThatNoException().isThrownBy(connection::commit);
+			assertThat(handler.messages).contains("There is no active transaction that can be committed, ignoring");
+		}
+		finally {
+			Logger.getLogger("org.neo4j.jdbc.connection").removeHandler(handler);
+		}
+	}
+
+	@Test
+	void shouldCheckTXStateBeforeCommitWhenAutoCommitted() throws SQLException {
+		var handler = new CapturingHandler();
+		Logger.getLogger("org.neo4j.jdbc.connection").addHandler(handler);
+		try (var connection = getConnection(); var stmt = connection.createStatement()) {
+			stmt.executeUpdate("RETURN 1");
+			assertThatNoException().isThrownBy(connection::commit);
+			assertThat(handler.messages).contains("There is no active transaction that can be committed, ignoring");
+		}
+		finally {
+			Logger.getLogger("org.neo4j.jdbc.connection").removeHandler(handler);
 		}
 	}
 
 	@Test
 	void shouldCheckTXStateBeforeRollback() throws SQLException {
+		var handler = new CapturingHandler();
+		Logger.getLogger("org.neo4j.jdbc.connection").addHandler(handler);
 		try (var connection = getConnection()) {
-			assertThatExceptionOfType(SQLException.class).isThrownBy(connection::rollback)
-				.withMessage("There is no transaction to rollback");
+			assertThatNoException().isThrownBy(connection::rollback);
+			assertThat(handler.messages).contains("There is no active transaction that can be rolled back, ignoring");
+		}
+		finally {
+			Logger.getLogger("org.neo4j.jdbc.connection").removeHandler(handler);
+		}
+	}
+
+	@Test
+	void shouldCheckTXStateBeforeRollbackWhenAutoRolledBack() throws SQLException {
+		var handler = new CapturingHandler();
+		Logger.getLogger("org.neo4j.jdbc.connection").addHandler(handler);
+		try (var connection = getConnection(); var stmt = connection.createStatement()) {
+			assertThatThrownBy(() -> stmt.executeQuery("UNWIND [1, 1, 1, 1, 0] AS x RETURN 1/x"))
+				.isInstanceOf(SQLException.class);
+			assertThatNoException().isThrownBy(connection::rollback);
+			assertThat(handler.messages).contains("There is no active transaction that can be rolled back, ignoring");
+		}
+		finally {
+			Logger.getLogger("org.neo4j.jdbc.connection").removeHandler(handler);
 		}
 	}
 
@@ -54,7 +108,7 @@ public class ConnectionIT extends IntegrationTestBase {
 		try (var connection = getConnection(); var statement = connection.createStatement()) {
 			// tx1 should fail
 			assertThatThrownBy(() -> statement.executeQuery("UNWIND [1, 1, 1, 1, 0] AS x RETURN 1/x"))
-				.isExactlyInstanceOf(SQLException.class);
+				.isInstanceOf(SQLException.class);
 			// tx2 should succeed
 			var resultSet = statement.executeQuery("RETURN 1");
 			assertThat(resultSet.next()).isTrue();
@@ -68,9 +122,9 @@ public class ConnectionIT extends IntegrationTestBase {
 			connection.setAutoCommit(false);
 			// tx1 should fail
 			assertThatThrownBy(() -> statement.executeQuery("UNWIND [1, 1, 1, 1, 0] AS x RETURN 1/x"))
-				.isExactlyInstanceOf(SQLException.class);
+				.isInstanceOf(SQLException.class);
 			// tx1 should remain failed
-			assertThatThrownBy(() -> statement.executeQuery("RETURN 1")).isExactlyInstanceOf(SQLException.class);
+			assertThatThrownBy(() -> statement.executeQuery("RETURN 1")).isInstanceOf(SQLException.class);
 			// tx1 should finish
 			connection.rollback();
 			// tx2 should succeed
@@ -96,7 +150,8 @@ public class ConnectionIT extends IntegrationTestBase {
 			// begin tx
 			var resultSet1 = statement1.executeQuery();
 			// attempt to begin another tx should fail
-			assertThatThrownBy(() -> statement2.executeQuery()).isExactlyInstanceOf(SQLException.class);
+			assertThatThrownBy(() -> statement2.executeQuery())
+				.isExactlyInstanceOf(SQLFeatureNotSupportedException.class);
 			// commit tx
 			resultSet1.close();
 
@@ -120,8 +175,8 @@ public class ConnectionIT extends IntegrationTestBase {
 			statement2.setString(1, uuid);
 			statement3.setString(1, uuid);
 
-			var resultSet1 = statement1.executeQuery();
-			var resultSet2 = statement2.executeQuery();
+			statement1.executeQuery();
+			statement2.executeQuery();
 			connection.commit();
 
 			var resultSet3 = statement3.executeQuery();
@@ -142,12 +197,12 @@ public class ConnectionIT extends IntegrationTestBase {
 			statement1.setString(1, uuid);
 			statement2.setString(1, uuid);
 
-			var resultSet1 = statement1.executeQuery();
+			statement1.executeQuery();
 			connection.setAutoCommit(!autocommit);
 
-			var resultSet2 = statement2.executeQuery();
-			assertThat(resultSet2.next()).isTrue();
-			assertThat(resultSet2.getInt(1)).isEqualTo(5);
+			var resultSet = statement2.executeQuery();
+			assertThat(resultSet.next()).isTrue();
+			assertThat(resultSet.getInt(1)).isEqualTo(5);
 		}
 	}
 
@@ -182,9 +237,9 @@ public class ConnectionIT extends IntegrationTestBase {
 
 			resultSet.next();
 			resultSet.next();
-			assertThatThrownBy(resultSet::next).isExactlyInstanceOf(SQLException.class);
-			assertThatThrownBy(() -> statement.executeQuery("RETURN 1")).isExactlyInstanceOf(SQLException.class);
-			assertThatThrownBy(() -> connection.getMetaData().getUserName()).isExactlyInstanceOf(SQLException.class);
+			assertThatThrownBy(resultSet::next).isInstanceOf(SQLException.class);
+			assertThatThrownBy(() -> statement.executeQuery("RETURN 1")).isInstanceOf(SQLException.class);
+			assertThatThrownBy(() -> connection.getMetaData().getUserName()).isInstanceOf(SQLException.class);
 		}
 	}
 
@@ -205,7 +260,7 @@ public class ConnectionIT extends IntegrationTestBase {
 
 			// then
 			resultSet.next();
-			assertThatThrownBy(resultSet::next).isExactlyInstanceOf(SQLException.class);
+			assertThatThrownBy(resultSet::next).isInstanceOf(SQLException.class);
 		}
 
 		try (var varificationConnection = getConnection();
@@ -217,18 +272,24 @@ public class ConnectionIT extends IntegrationTestBase {
 		}
 	}
 
+	boolean usingQueryAPI() {
+		return "http".equalsIgnoreCase(this.protocol);
+	}
+
 	@Test
+	@DisabledIf("usingQueryAPI")
 	void shouldRaiseErrorOnClosingResultSetWhenInAutoCommit() throws SQLException {
 		try (var connection = getConnection(); var statement = connection.createStatement()) {
 			statement.setFetchSize(2);
 			var resultSet = statement.executeQuery("UNWIND [1, 1, 0] AS x CREATE (n {val: 1/x}) RETURN n");
 			assertThat(resultSet.next()).isTrue();
 			assertThat(resultSet.next()).isTrue();
-			assertThatThrownBy(resultSet::close).isExactlyInstanceOf(SQLException.class);
+			assertThatThrownBy(resultSet::close).isInstanceOf(SQLException.class);
 		}
 	}
 
 	@Test
+	@DisabledIf("usingQueryAPI")
 	void shouldRaiseErrorOnClosingStatementWhenInAutoCommit() throws SQLException {
 		try (var connection = getConnection()) {
 			var statement = connection.createStatement();
@@ -236,7 +297,7 @@ public class ConnectionIT extends IntegrationTestBase {
 			var resultSet = statement.executeQuery("UNWIND [1, 1, 0] AS x CREATE (n {val: 1/x}) RETURN n");
 			assertThat(resultSet.next()).isTrue();
 			assertThat(resultSet.next()).isTrue();
-			assertThatThrownBy(statement::close).isExactlyInstanceOf(SQLException.class);
+			assertThatThrownBy(statement::close).isInstanceOf(SQLException.class);
 		}
 	}
 
@@ -246,6 +307,34 @@ public class ConnectionIT extends IntegrationTestBase {
 			var neo4jConnection = connection.unwrap(Neo4jConnection.class);
 			assertThat(neo4jConnection.getDatabaseName()).isNotBlank();
 		}
+	}
+
+	@Override
+	String getConnectionURL() {
+		var neo4j = "neo4j".equals(this.protocol);
+		return "jdbc:neo4j%s://%s:%d/neo4j".formatted(neo4j ? "" : ":" + this.protocol, this.neo4j.getHost(),
+				this.neo4j.getMappedPort(neo4j ? 7687 : 7474));
+	}
+
+	static class CapturingHandler extends Handler {
+
+		List<String> messages = new ArrayList<>();
+
+		@Override
+		public void publish(LogRecord record) {
+			this.messages.add(record.getMessage());
+		}
+
+		@Override
+		public void flush() {
+
+		}
+
+		@Override
+		public void close() throws SecurityException {
+
+		}
+
 	}
 
 }

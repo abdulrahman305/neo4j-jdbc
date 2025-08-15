@@ -23,7 +23,7 @@ ifdef::site-gen-antora[]
 :examplesDir: examples$
 endif::[]
 
-:copyright: Copyright 2023-2024 the original authors.
+:copyright: Copyright 2023-2025 the original authors.
 
 (C) {copyright}
 
@@ -37,6 +37,9 @@ For information on upgrade/migration from other drivers to this one, see xref:mi
 
 
 ifndef::site-gen-antora[]
+
+:imagesdir: ../images/
+
 include::usage.adoc[leveloffset=+1]
 
 include::distribution.adoc[leveloffset=+1]
@@ -46,6 +49,10 @@ include::configuration.adoc[leveloffset=+1]
 include::metadata.adoc[leveloffset=+1]
 
 include::sql2cypher.adoc[leveloffset=+1]
+
+include::cypher_backed_views.adoc[leveloffset=+1]
+
+include::object_mapping.adoc[leveloffset=+1]
 
 include::text2cypher.adoc[leveloffset=+1]
 
