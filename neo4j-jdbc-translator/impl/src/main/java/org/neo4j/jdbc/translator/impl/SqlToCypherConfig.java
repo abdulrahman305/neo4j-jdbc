@@ -389,7 +389,7 @@ public final class SqlToCypherConfig {
 
 	/**
 	 * Converts this configuration into jOOQ settings.
-	 * @param withMetaLookups wether to use configurable lookups or not
+	 * @param withMetaLookups whether to use configurable lookups or not
 	 * @return jOOQ Settings
 	 * @deprecated No replacement, not to be used externally
 	 */
@@ -449,7 +449,7 @@ public final class SqlToCypherConfig {
 		private Builder() {
 			this(ParseNameCase.AS_IS, RenderNameCase.AS_IS, false, Map.of(), Map.of(), SQLDialect.DEFAULT, false, false,
 					null, false, Translator.LOWEST_PRECEDENCE, null,
-					"(?<lhs>.+?)_(?<=_)(?<reltype>[_\\p{Lu}]+)(?=_)_(?<rhs>.+?)");
+					"(?<start>.+?)_(?<=_)(?<reltype>[_\\p{Lu}]+)(?=_)_(?<end>.+?)");
 		}
 
 		private Builder(SqlToCypherConfig config) {

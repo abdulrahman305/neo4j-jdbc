@@ -19,9 +19,10 @@
 package org.neo4j.jdbc.it.cp;
 
 import java.sql.Connection;
-import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.stream.Stream;
 
@@ -29,13 +30,16 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.provider.Arguments;
-import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.neo4j.Neo4jContainer;
+import org.testcontainers.utility.MountableFile;
 
 @Testcontainers(disabledWithoutDocker = true)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class IntegrationTestBase {
 
+	// used by several parameterized test classes
+	@SuppressWarnings("unused")
 	protected final Stream<Arguments> allProtocols() {
 		var result = Stream.<Arguments>builder();
 		result.add(Arguments.of("neo4j"));
@@ -59,23 +63,25 @@ abstract class IntegrationTestBase {
 	}
 
 	@SuppressWarnings("resource") // On purpose to reuse this
-	protected final Neo4jContainer<?> neo4j;
+	protected final Neo4jContainer neo4j;
 
 	protected boolean doClean = true;
 
-	protected Driver driver;
+	/**
+	 * Absolute classpath resources to copy over into the
+	 * <code>/var/lib/neo4j/import</code> folder inside the container.
+	 */
+	protected List<String> resources = new ArrayList<>();
 
 	@BeforeAll
 	void startNeo4j() throws SQLException {
 		this.neo4j.start();
+		for (var resource : this.resources) {
+			this.neo4j.copyFileToContainer(MountableFile.forClasspathResource(resource),
+					"/var/lib/neo4j/import/%s".formatted(resource.substring(resource.lastIndexOf("/") + 1)));
+		}
 
-		var url = getConnectionURL();
-		this.driver = DriverManager.getDriver(url);
-		var properties = new Properties();
-		properties.put("user", "neo4j");
-		properties.put("password", this.neo4j.getAdminPassword());
-		properties.put("database", "system");
-		try (var connection = this.driver.connect(url, properties); var stmt = connection.createStatement()) {
+		try (var connection = getConnection(false, false); var stmt = connection.createStatement()) {
 			var resultSet = stmt.executeQuery("CALL dbms.components() YIELD edition");
 			resultSet.next();
 			var edition = resultSet.getString("edition");
@@ -124,7 +130,7 @@ abstract class IntegrationTestBase {
 				properties.put(additionalProperties[0], additionalProperties[1]);
 			}
 		}
-		return this.driver.connect(url, properties);
+		return DriverManager.getConnection(url, properties);
 	}
 
 	String getConnectionURL() {

@@ -21,6 +21,7 @@ package org.neo4j.jdbc;
 import java.sql.ResultSet;
 
 import org.neo4j.jdbc.events.ResultSetListener;
+import org.neo4j.jdbc.values.Record;
 
 /**
  * A Neo4j specific extension of a {@link ResultSet}. It may be referred to for use with
@@ -38,5 +39,11 @@ public sealed interface Neo4jResultSet extends ResultSet permits ResultSetImpl {
 	 * @since 6.3.0
 	 */
 	void addListener(ResultSetListener resultSetListener);
+
+	/**
+	 * {@return the current record if any}
+	 * @since 6.10.0
+	 */
+	Record getCurrentRecord();
 
 }

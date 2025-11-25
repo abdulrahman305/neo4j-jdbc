@@ -18,29 +18,36 @@
  */
 package org.neo4j.jdbc.it.hibernate;
 
-import java.util.UUID;
+import java.util.HashSet;
+import java.util.Set;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.ManyToMany;
+import jakarta.persistence.OneToMany;
 
 @Entity
-@Table(name = "Movie")
 public class Movie {
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.UUID)
-	private UUID id;
+	private String id;
 
 	private String title;
 
-	public UUID getId() {
+	@OneToMany(mappedBy = "movie")
+	private Set<Actor> actors = new HashSet<>();
+
+	@ManyToMany(mappedBy = "directed")
+	private Set<Person> directors = new HashSet<>();
+
+	public String getId() {
 		return this.id;
 	}
 
-	public void setId(UUID id) {
+	public void setId(String id) {
 		this.id = id;
 	}
 
@@ -50,6 +57,14 @@ public class Movie {
 
 	public void setTitle(String title) {
 		this.title = title;
+	}
+
+	public Set<Actor> getActors() {
+		return this.actors;
+	}
+
+	public Set<Person> getDirectors() {
+		return this.directors;
 	}
 
 }

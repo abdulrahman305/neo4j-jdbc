@@ -43,6 +43,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -1085,7 +1086,9 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 						column.type())));
 	}
 
-	@SuppressWarnings("squid:S3776") // Yep, this is complex.
+	// Yep, this is complex; S3047 is about looping the records twice
+	// which is needed however.
+	@SuppressWarnings({ "squid:S3776", "squid:S3047" })
 	@Override
 	public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern)
 			throws SQLException {
@@ -1098,7 +1101,10 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 				(tableNamePattern != null) ? tableNamePattern.replace("%", ".*") : tableNamePattern, "column_name",
 				columnNamePattern, "sampleSize", this.relationshipSampleSize, "viewColumns", getViewColumns());
 		var innerColumnsResponse = doQueryForPullResponse(request);
-		var records = innerColumnsResponse.records();
+		var records = innerColumnsResponse.records()
+			.stream()
+			.filter(record -> !(record.get(1).isNull() || record.get(2).isNull()))
+			.toList();
 
 		var rows = new LinkedList<Value[]>();
 
@@ -1106,14 +1112,18 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 
 		var cbvs = new HashSet<Value>();
 
-		for (Record record : records) {
+		// Distribution of property names, needed upfront
+		var propertyCount = new HashMap<Value, AtomicInteger>();
+		for (var record : records) {
+
+			var propertyName = record.get(1);
+			propertyCount.computeIfAbsent(propertyName, ignored -> new AtomicInteger()).incrementAndGet();
+		}
+
+		for (var record : records) {
 
 			var propertyName = record.get(1);
 			var propertyTypes = record.get(2);
-
-			if (propertyName.isNull() || propertyTypes.isNull()) {
-				continue;
-			}
 
 			var nodeLabels = record.get(0);
 			Value labelsOrTypes = nodeLabels;
@@ -1138,6 +1148,7 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 				}
 			}
 
+			var scopeTable = record.get(COL_SCOPE_TABLE);
 			var nodeLabelList = nodeLabels.asList(Function.identity());
 			for (Value nodeLabel : nodeLabelList) {
 				// Avoid duplicates while unrolling
@@ -1145,10 +1156,13 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 				if (properties.contains(propertyName)) {
 					continue;
 				}
+				if (propertyCount.get(propertyName).getPlain() > 1 && !scopeTable.isNull()) {
+					propertyName = Values
+						.value(scopeTable.asString().toLowerCase(Locale.ROOT) + "_" + propertyName.asString());
+				}
 				properties.add(propertyName);
-
 				var values = addColumn(nodeLabel, propertyName, propertyType, NULLABLE, IS_NULLABLE,
-						nodeLabelList.indexOf(nodeLabel) + 1, false);
+						nodeLabelList.indexOf(nodeLabel) + 1, false, scopeTable);
 				rows.add(values.toArray(Value[]::new));
 				if ("CBV".equals(tableType)) {
 					cbvs.add(nodeLabel);
@@ -1184,7 +1198,7 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 				}
 
 				var values = addColumn(v, Values.value(additionalId), Values.value("String"),
-						DatabaseMetaData.columnNoNulls, "NO", 0, true);
+						DatabaseMetaData.columnNoNulls, "NO", 0, true, Values.NULL);
 				rows.add(0, values.toArray(Value[]::new));
 			}
 		}
@@ -1197,7 +1211,7 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 	}
 
 	private ArrayList<Value> addColumn(Value nodeLabel, Value propertyName, Value propertyType, int NULLABLE,
-			String IS_NULLABLE, Integer ordinalPosition, boolean generated) throws SQLException {
+			String IS_NULLABLE, Integer ordinalPosition, boolean generated, Value scopeTable) throws SQLException {
 		var values = new ArrayList<Value>();
 		values.add(Values.value(getSingleCatalog())); // TABLE_CAT
 		values.add(Values.value(DEFAULT_SCHEMA)); // TABLE_SCHEM is always public
@@ -1220,7 +1234,7 @@ final class DatabaseMetadataImpl implements Neo4jDatabaseMetaData {
 		values.add(Values.value(IS_NULLABLE));
 		values.add(Values.NULL); // SCOPE_CATALOG
 		values.add(Values.NULL); // SCOPE_SCHEMA
-		values.add(Values.NULL); // SCOPE_TABLE
+		values.add(scopeTable); // SCOPE_TABLE
 		values.add(Values.NULL); // SOURCE_DATA_TYPE
 		values.add(Values.value("NO")); // IS_AUTOINCREMENT
 		values.add(Values.value(generated ? "YES" : "NO")); // IS_GENERATEDCOLUMN

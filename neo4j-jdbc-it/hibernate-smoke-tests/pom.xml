@@ -25,14 +25,14 @@
 	<parent>
 		<groupId>org.neo4j</groupId>
 		<artifactId>neo4j-jdbc-it</artifactId>
-		<version>6.9.1-SNAPSHOT</version>
+		<version>6.10.1-SNAPSHOT</version>
 	</parent>
 	<artifactId>neo4j-jdbc-hibernate-smoke-tests</artifactId>
 
 	<name>Neo4j JDBC Driver (Hibernate Smoke tests)</name>
 
 	<properties>
-		<hibernate-platform.version>7.1.4.Final</hibernate-platform.version>
+		<hibernate-platform.version>7.1.10.Final</hibernate-platform.version>
 	</properties>
 
 	<dependencyManagement>
@@ -79,12 +79,12 @@
 		</dependency>
 		<dependency>
 			<groupId>org.testcontainers</groupId>
-			<artifactId>junit-jupiter</artifactId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.testcontainers</groupId>
-			<artifactId>neo4j</artifactId>
+			<artifactId>testcontainers-neo4j</artifactId>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

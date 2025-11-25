@@ -21,6 +21,7 @@ package org.neo4j.jdbc.it.cp;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -44,6 +45,7 @@ import org.junit.jupiter.params.Parameter;
 import org.junit.jupiter.params.ParameterizedClass;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.platform.commons.util.ReflectionUtils;
@@ -159,6 +161,86 @@ abstract class AbstractDatabaseMetadata extends IntegrationTestBase {
 	}
 
 	@Test
+	void joinTablesWithoutPropertiesOnRel() throws SQLException {
+
+		try (var con = this.getConnection(false, true)) {
+			try (var stmt = con.createStatement()) {
+				stmt.execute("CREATE (p:Start {col1: 'colSourceValue'})-[:REL]->(:End {col2: 'colTargetValue'})\n");
+			}
+
+			var meta = con.getMetaData();
+			var columnsRs = meta.getColumns(null, null, "Start_REL_End", null);
+			var columns = new HashSet<String>();
+			while (columnsRs.next()) {
+				columns.add(columnsRs.getString("COLUMN_NAME"));
+			}
+
+			assertThat(columns).containsExactlyInAnyOrder("v$start_id", "v$end_id", "col2", "v$id", "col1");
+		}
+	}
+
+	@ParameterizedTest
+	@CsvSource(delimiterString = "|",
+			textBlock = """
+					CREATE (p:Start {col: 'colSourceValue'})-[:REL {col: 'colRelValue'}]->(:End {col: 'colTargetValue'}) | v$start_id, v$end_id, start_col, col, end_col, v$id | SELECT * FROM Start_REL_End alias WHERE alias.start_col = 'colSourceValue' @ SELECT * FROM Start_REL_End alias WHERE alias.col = 'colRelValue' AND alias.start_col = 'colSourceValue' @ SELECT * FROM Start_REL_End alias WHERE alias.end_col = 'colTargetValue'
+					CREATE (p:Start)-[:REL {col: 'colRelValue'}]->(:End {col: 'colTargetValue'})                         | v$start_id, v$end_id, col, end_col, v$id            | SELECT * FROM Start_REL_End alias WHERE alias.end_col = 'colTargetValue'   @ SELECT * FROM Start_REL_End alias WHERE alias.col = 'colRelValue' AND alias.end_col = 'colTargetValue'
+					CREATE (p:Start {col: 'colSourceValue'})-[:REL]->(:End {col: 'colTargetValue'})                      | v$start_id, v$end_id, start_col, end_col, v$id      | SELECT * FROM Start_REL_End alias WHERE alias.start_col = 'colSourceValue'
+					CREATE (p:Start {col: 'colSourceValue'})-[:REL {col: 'colRelValue'}]->(:End)                         | v$start_id, v$end_id, start_col, col, v$id          | SELECT * FROM Start_REL_End alias WHERE alias.start_col = 'colSourceValue' @ SELECT * FROM Start_REL_End alias WHERE alias.col = 'colRelValue' AND alias.start_col = 'colSourceValue'
+					""")
+	void joinTablesWithDuplicateColumns(String graph, String expected, String select) throws SQLException {
+
+		try (var con = this.getConnection(false, true)) {
+			try (var stmt = con.createStatement()) {
+				stmt.execute(graph);
+			}
+
+			var meta = con.getMetaData();
+			var columnsRs = meta.getColumns(null, null, "Start_REL_End", null);
+			var columns = new HashSet<String>();
+			while (columnsRs.next()) {
+				columns.add(columnsRs.getString("COLUMN_NAME"));
+			}
+
+			assertThat(columns).containsExactlyInAnyOrder(expected.split(" ?, ?"));
+		}
+
+		var queries = new ArrayList<String>();
+		for (var query : select.split("@")) {
+			queries.add(query.trim());
+			queries.add(query.trim().replaceAll("alias\\.?", ""));
+		}
+
+		try (var con = this.getConnection(true, true); var stmt = con.createStatement()) {
+			for (var query : queries) {
+				var rs = stmt.executeQuery(query);
+				assertThat(rs.next()).isTrue();
+				assertThat(rs.next()).isFalse();
+				rs.close();
+			}
+		}
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "CREATE (p:Start {col: 'colValue'})-[:REL]->(:End)",
+			"CREATE (p:Start)-[:REL {col: 'colValue'}]->(:End)", "CREATE (p:Start)-[:REL]->(:End {col: 'colValue'})" })
+	void joinTablesWithoutPropertiesOnStartOrEnd(String graph) throws SQLException {
+
+		try (var con = this.getConnection(false, true)) {
+			try (var stmt = con.createStatement()) {
+				stmt.execute(graph);
+			}
+
+			var meta = con.getMetaData();
+			var columnsRs = meta.getColumns(null, null, "Start_REL_End", null);
+			var columns = new HashSet<String>();
+			while (columnsRs.next()) {
+				columns.add(columnsRs.getString("COLUMN_NAME"));
+			}
+			assertThat(columns).containsExactlyInAnyOrder("v$start_id", "v$end_id", "col", "v$id");
+		}
+	}
+
+	@Test
 	void getAllProcedures() throws SQLException {
 		try (var results = this.connection.getMetaData().getProcedures(null, null, null)) {
 			var resultCount = 0;
@@ -182,7 +264,7 @@ abstract class AbstractDatabaseMetadata extends IntegrationTestBase {
 	void getReadOnlyShouldWork(String database, boolean expected) throws SQLException {
 		var info = new Properties();
 		info.put("password", this.neo4j.getAdminPassword());
-		try (var readOnlyConnection = driver.connect(getConnectionURL(database), info)) {
+		try (var readOnlyConnection = DriverManager.getConnection(getConnectionURL(database), info)) {
 			assertThat(readOnlyConnection.getMetaData().isReadOnly()).isEqualTo(expected);
 
 			// some smoke test for multi db setup
@@ -1077,8 +1159,8 @@ abstract class AbstractDatabaseMetadata extends IntegrationTestBase {
 	void getTablesWithoutSamplingShouldWork() throws SQLException {
 		var info = new Properties();
 		info.put("password", this.neo4j.getAdminPassword());
-		try (var connectionWithLowerSampleSize = this.driver.connect(getConnectionURL() + "?relationshipSampleSize=-1",
-				info)) {
+		try (var connectionWithLowerSampleSize = DriverManager
+			.getConnection(getConnectionURL() + "?relationshipSampleSize=-1", info)) {
 			var metaData = connectionWithLowerSampleSize.getMetaData();
 			assertThatNoException().isThrownBy(() -> metaData.getTables(null, null, null, null));
 		}
@@ -1179,10 +1261,32 @@ abstract class AbstractDatabaseMetadata extends IntegrationTestBase {
 		assertThat(resultSet).isNotNull();
 		var columns = new ArrayList<String>();
 		while (resultSet.next()) {
-			columns.add(resultSet.getString("COLUMN_NAME"));
+			var columnName = resultSet.getString("COLUMN_NAME");
+			var scopeTable = resultSet.getString("SCOPE_TABLE");
+			columns.add(columnName);
+			if ("name".equals(columnName)) {
+				assertThat(scopeTable).isEqualTo("Person");
+			}
+			else if ("title".equals(columnName)) {
+				assertThat(scopeTable).isEqualTo("Movie");
+			}
+			else {
+				assertThat(scopeTable).isNull();
+			}
 		}
 		resultSet.close();
-		assertThat(columns).containsOnly("role", "v$movie_id", "v$person_id", "v$id");
+		var expectedColumns = new String[] { "role", "v$movie_id", "v$person_id", "v$id", "name", "title" };
+		assertThat(columns).containsOnly(expectedColumns);
+
+		try (var con = getConnection(true, true);
+				var stmt = con.createStatement();
+				var rs = stmt.executeQuery("SELECT * FROM Person_ACTED_IN_Movie")) {
+			while (rs.next()) {
+				for (var expectedColumn : expectedColumns) {
+					assertThat(rs.getObject(expectedColumn)).isNotNull();
+				}
+			}
+		}
 	}
 
 	@Test

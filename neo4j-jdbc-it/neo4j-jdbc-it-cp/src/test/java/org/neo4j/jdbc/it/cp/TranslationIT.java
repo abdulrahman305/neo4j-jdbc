@@ -19,6 +19,7 @@
 package org.neo4j.jdbc.it.cp;
 
 import java.io.IOException;
+import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -28,10 +29,16 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.stream.Stream;
 
 import org.jooq.impl.ParserException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.neo4j.jdbc.Neo4jPreparedStatement;
 import org.neo4j.jdbc.values.Node;
@@ -102,6 +109,140 @@ class TranslationIT extends IntegrationTestBase {
 			}
 		}
 
+	}
+
+	@ParameterizedTest
+	@CsvSource(delimiterString = "|",
+			textBlock = """
+					d1_1 | SELECT d1_0.name from Person p1_0 join Person_ACTED_IN_Movie d1_0 on p1_0.id=d1_0.person_id join Movie d1_1 on d1_1.id=d1_0.movie_id
+					d1_1 | SELECT d1_0.name from Person p1_0 join Person_ACTED_IN_Movie d1_0 on d1_0.person_id=p1_0.id join Movie d1_1 on d1_1.id=d1_0.movie_id
+					_end | SELECT d1_0.name from Person_ACTED_IN_Movie d1_0 LEFT JOIN Person p1_0 ON p1_0.id=d1_0.person_id
+					""")
+	void shouldFlattenedJoinedRelationShip(String endNode, String query) throws SQLException {
+		try (var connection = getConnection(true, true)) {
+			try (var statement = connection.prepareStatement(
+					"/*+ NEO4J FORCE_CYPHER */ CREATE (a:Person {id: 'x', name: 'Jaret Leto'})-[:ACTED_IN {role: 'Ares'}]->(m:Movie {id: 'y', title: 'TRON Ares'})")) {
+				statement.executeUpdate();
+			}
+
+			var sql = connection.nativeSQL(query);
+			assertThat(sql).isEqualTo("MATCH (p1_0:Person)-[d1_0:ACTED_IN]->(%s:Movie) RETURN p1_0.name AS name",
+					endNode);
+		}
+	}
+
+	@Test
+	void shouldInsertIntoRelationshipWithSamePropertiesWithTemplate() throws SQLException {
+
+		try (var connection = getConnection(true, true, "s2c.prettyPrint", "true")) {
+			try (var statement = connection.prepareStatement(
+					"/*+ NEO4J FORCE_CYPHER */ CREATE (a:Person {name: 'Jack Nance'})-[:ACTED_IN {role: 'Henry Spencer'}]->(m:Movie {name: 'Eraserhead'})")) {
+				statement.executeUpdate();
+			}
+
+			// Assert meta
+			assertThat(connection.nativeSQL("SELECT * FROM Person_ACTED_IN_Movie WHERE 1=0")).isEqualTo(
+					"""
+							MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie)
+							WHERE 1 = 0
+							RETURN elementId(_start) AS `v$person_id`, elementId(person_acted_in_movie) AS `v$id`, _start.name AS person_name, _end.name AS movie_name, person_acted_in_movie.role AS role, elementId(_end) AS `v$movie_id`""");
+
+			var meta = connection.getMetaData();
+			var rs = meta.getColumns(null, null, "Person_ACTED_IN_Movie", null);
+			var columnNames = new ArrayList<String>();
+			while (rs.next()) {
+				columnNames.add(rs.getString("COLUMN_NAME"));
+			}
+			assertThat(columnNames).containsExactlyInAnyOrder("v$movie_id", "v$person_id", "v$id", "movie_name",
+					"person_name", "role");
+
+			rs.close();
+			try (var statement = connection.createStatement()) {
+				statement.executeUpdate(
+						"INSERT INTO Person_ACTED_IN_Movie(movie_name, person_name, role) VALUES ('Eraserhead', 'Jeanne Bates', 'Mrs. X')");
+			}
+
+			assertMovieAndPersonCreated(connection);
+		}
+	}
+
+	Stream<Arguments> shouldSelectPrefixedAndNonePrefixedProperties() {
+		return Stream.of(Arguments.of("SELECT person_name, movie_name FROM Person_ACTED_IN_Movie", "person_name",
+				"movie_name",
+				"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN _start.name AS person_name, _end.name AS movie_name"),
+				Arguments.of("SELECT Person.name, Movie.name FROM Person_ACTED_IN_Movie", "_start.name", "_end.name",
+						"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN _start.name, _end.name"),
+				Arguments.of("SELECT Person.name AS person_name, Movie.name AS movie_name FROM Person_ACTED_IN_Movie",
+						"person_name", "movie_name",
+						"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN _start.name AS person_name, _end.name AS movie_name"),
+				Arguments.of("SELECT person.name, movie.name FROM Person_ACTED_IN_Movie", "_start.name", "_end.name",
+						"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN _start.name, _end.name"),
+				Arguments.of("SELECT person.name AS person_name, movie.name AS movie_name FROM Person_ACTED_IN_Movie",
+						"person_name", "movie_name",
+						"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN _start.name AS person_name, _end.name AS movie_name"),
+				Arguments.of("SELECT * FROM Person_ACTED_IN_Movie", "person_name", "movie_name",
+						"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN elementId(_start) AS `v$person_id`, elementId(person_acted_in_movie) AS `v$id`, _start.name AS person_name, _end.name AS movie_name, person_acted_in_movie.role AS role, elementId(_end) AS `v$movie_id`"));
+	}
+
+	@ParameterizedTest
+	@MethodSource
+	void shouldSelectPrefixedAndNonePrefixedProperties(String query, String col1, String col2, String expected)
+			throws SQLException {
+
+		try (var connection = getConnection(false, false)) {
+			try (var statement = connection.prepareStatement(
+					"CREATE (a:Person {name: 'Brad Pitt'})-[:ACTED_IN {role: 'David Mills'}]->(m:Movie {name: 'Seven'})")) {
+				statement.executeUpdate();
+			}
+		}
+
+		try (var connection = getConnection(true, false)) {
+			assertThat(connection.nativeSQL(query)).isEqualTo(expected);
+			try (var statement = connection.createStatement()) {
+				var rs = statement.executeQuery(query);
+				assertThat(rs.next()).isTrue();
+				assertThat(rs.getString(col1)).isEqualTo("Brad Pitt");
+				assertThat(rs.getString(col2)).isEqualTo("Seven");
+			}
+		}
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "INSERT INTO Person_ACTED_IN_Movie(movie_name, person_name, role) VALUES (?, ?, ?)",
+			"INSERT INTO Person_ACTED_IN_Movie(movie.name, person.name, role) VALUES (?, ?, ?)" })
+	void shouldInsertIntoRelationshipWithSamePropertiesWithoutTemplate(String query) throws SQLException {
+
+		try (var connection = getConnection(true, true)) {
+			try (var ps = connection.prepareStatement(query)) {
+
+				ps.setString(1, "Eraserhead");
+				ps.setString(2, "Jeanne Bates");
+				ps.setString(3, "Mrs. X");
+				ps.addBatch();
+
+				ps.setString(1, "Eraserhead");
+				ps.setString(2, "Jack Nance");
+				ps.setString(3, "Henry Spencer");
+
+				ps.executeBatch();
+
+				assertMovieAndPersonCreated(connection);
+			}
+		}
+	}
+
+	private static void assertMovieAndPersonCreated(Connection connection) throws SQLException {
+		try (var statement = connection.createStatement();
+				var rs = statement.executeQuery(
+						"/*+ NEO4J FORCE_CYPHER */ MATCH (n:Movie {name: 'Eraserhead'})<-[:ACTED_IN]-(p:Person) RETURN n, collect(p.name)")) {
+			assertThat(rs.next()).isTrue();
+			var n = rs.getObject(1, Node.class);
+			assertThat(n.get("name")).extracting(Value::asString).isEqualTo("Eraserhead");
+			@SuppressWarnings("unchecked")
+			var p = (List<String>) rs.getObject(2, List.class);
+			assertThat(p).containsExactlyInAnyOrder("Jack Nance", "Jeanne Bates");
+			assertThat(rs.next()).isFalse();
+		}
 	}
 
 	@Test
@@ -669,16 +810,14 @@ class TranslationIT extends IntegrationTestBase {
 					   FROM `public`.`Person_ACTED_IN_Movie` `Person_ACTED_IN_Movie`
 					""");
 			assertThat(cypher).isEqualTo(
-					"MATCH (_lhs:Person)-[person_acted_in_movie:ACTED_IN]->(_rhs:Movie) RETURN person_acted_in_movie.roles AS roles, elementId(person_acted_in_movie) AS v_id, elementId(_rhs) AS v_movie_id, elementId(_lhs) AS v_person_id LIMIT 100");
+					"MATCH (_start:Person)-[person_acted_in_movie:ACTED_IN]->(_end:Movie) RETURN person_acted_in_movie.roles AS roles, elementId(person_acted_in_movie) AS v_id, elementId(_end) AS v_movie_id, elementId(_start) AS v_person_id LIMIT 100");
 		}
 
 	}
 
 	@SuppressWarnings("SqlNoDataSourceInspection")
 	@Test
-	void innerJoinWrongColumn() throws SQLException, IOException {
-		// Those queries will return empty results, but will not fail and are essentially
-		// correct as formulated in SQL
+	void innerJoinColumnsWrongDirection() throws SQLException, IOException {
 		try (var connection = getConnection(true, false)) {
 			TestUtils.createMovieGraph(connection);
 			var cypher = connection.nativeSQL("""
@@ -687,7 +826,7 @@ class TranslationIT extends IntegrationTestBase {
 					INNER JOIN `public`.`Person_DIRECTED_Movie` `Person_DIRECTED_Movie`
 					ON (`Person`.`v$id` = `Person_DIRECTED_Movie`.`v$id`) GROUP BY `name`, `v_movie_id`""");
 			assertThat(cypher).isEqualTo(
-					"MATCH (person:Person)-[person_directed_movie:DIRECTED WHERE elementId(person) = elementId(person_directed_movie)]->(_rhs:Movie) RETURN person.name AS name, elementId(_rhs) AS v_movie_id");
+					"MATCH (person:Person)-[person_directed_movie:DIRECTED]->(_end:Movie) RETURN person.name AS name, elementId(_end) AS v_movie_id");
 
 			cypher = connection.nativeSQL("""
 					SELECT `Movie`.`title` AS `title`, `Person_DIRECTED_Movie`.`v$movie_id` AS `v_movie_id`
@@ -695,7 +834,7 @@ class TranslationIT extends IntegrationTestBase {
 					INNER JOIN `public`.`Person_DIRECTED_Movie` `Person_DIRECTED_Movie`
 					ON (`Movie`.`v$id` = `Person_DIRECTED_Movie`.`v$id`) GROUP BY `name`, `v_movie_id`""");
 			assertThat(cypher).isEqualTo(
-					"MATCH (_lhs:Person)-[person_directed_movie:DIRECTED WHERE elementId(movie) = elementId(person_directed_movie)]->(movie) RETURN movie.title AS title, elementId(movie) AS v_movie_id");
+					"MATCH (_start:Person)-[person_directed_movie:DIRECTED]->(movie:Movie) RETURN movie.title AS title, elementId(movie) AS v_movie_id");
 		}
 
 	}
@@ -797,6 +936,126 @@ class TranslationIT extends IntegrationTestBase {
 	}
 
 	record NameAndRoles(String name, List<String> roles) {
+	}
+
+	@Nested
+	class RelationshipInsertions {
+
+		@BeforeEach
+		void prepareData() throws SQLException {
+			try (var connection = getConnection(false, false)) {
+				try (var statement = connection.createStatement()) {
+					statement.executeUpdate("MATCH (n) DETACH DELETE n");
+					statement.executeUpdate(
+							"CREATE (a:User {name: 'Michael'})-[:LIKES {rating: 5}]->(m:Music {genre: 'Grind Core'})");
+					statement.executeUpdate(
+							"CREATE (a:Benutzer {name: 'Michael'})-[:MAG {name: 'this does', genre: 'not belong here', rating: 5}]->(m:Musik {genre: 'Punk Rock'})");
+					statement.executeUpdate(
+							"CREATE (a:Gebruiker {name: 'Michael'})-[:HOUDT_VAN {name: 'this does', genre: 'not belong here', rating: 5}]->(m:Musk {name: 'whatever', genre: 'Gabba'})");
+				}
+			}
+		}
+
+		@ParameterizedTest
+		@CsvSource(delimiterString = "|",
+				textBlock = """
+						false|false|false|INSERT INTO User_LIKES_Music(name, genre) VALUES (?, ?)
+						false|false|false|INSERT INTO Benutzer_MAG_Musik(name, genre) VALUES (?, ?)
+						false|false|false|INSERT INTO Gebruiker_HOUDT_VAN_Musk(name, genre) VALUES (?, ?)
+						true |false|false|INSERT INTO User_LIKES_Music(name, genre) VALUES ('Oskar', 'Hip-Hop'), ('Tina', 'Pop')
+						true |false|false|INSERT INTO Benutzer_MAG_Musik(name, genre) VALUES ('Oskar', 'Hip-Hop'), ('Tina', 'Pop')
+						true |false|false|INSERT INTO Gebruiker_HOUDT_VAN_Musk(name, genre) VALUES ('Oskar', 'Hip-Hop'), ('Tina', 'Pop')
+						false|true |false|INSERT INTO User_LIKES_Music(v$user_id, v$music_id) VALUES (?, ?)
+						false|true |true |INSERT INTO User_LIKES_Music(v$user_id, v$music_id) VALUES (?, ?), (?, ?)
+						""")
+		void propertiesMustBeOnlyUsedOnce(boolean inlined, boolean viaElementId, boolean batch, String query)
+				throws SQLException {
+			try (var connection = getConnection(true, true)) {
+				var p1 = new String[] { "Oskar", "Hip-Hop" };
+				var p2 = batch ? new String[] { "Tina", "Pop" } : new String[0];
+				if (viaElementId) {
+					try (var statement = connection
+						.prepareStatement("/*+ NEO4J FORCE_CYPHER */ CREATE (n:$($label) $props) RETURN elementId(n)")
+						.unwrap(Neo4jPreparedStatement.class)) {
+						for (var pair : new String[][] { p1, p2 }) {
+							if (pair.length == 0) {
+								continue;
+							}
+							statement.setString("label", "User");
+							statement.setObject("props", Map.of("name", pair[0]));
+							var rs = statement.executeQuery();
+							rs.next();
+							pair[0] = rs.getString(1);
+							statement.setString("label", "Music");
+							statement.setObject("props", Map.of("genre", pair[1]));
+							rs = statement.executeQuery();
+							rs.next();
+							pair[1] = rs.getString(1);
+						}
+					}
+				}
+				try (var statement = connection.prepareStatement(query)) {
+					if (!inlined) {
+						int cnt = 0;
+						for (var pair : new String[][] { p1, p2 }) {
+							if (pair.length == 0) {
+								continue;
+							}
+
+							statement.setString(1 + cnt, pair[0]);
+							statement.setString(2 + cnt, pair[1]);
+							cnt += 2;
+						}
+					}
+					statement.executeUpdate();
+				}
+
+				assertRelationship(connection, null);
+			}
+		}
+
+		@ParameterizedTest
+		@CsvSource(delimiterString = "|",
+				textBlock = """
+						false|INSERT INTO User_LIKES_Music(name, genre, rating) VALUES (?, ?, ?)
+						false|INSERT INTO Benutzer_MAG_Musik(name, genre, rating) VALUES (?, ?, ?)
+						false|INSERT INTO Gebruiker_HOUDT_VAN_Musk(name, genre, rating) VALUES (?, ?, ?)
+						true |INSERT INTO User_LIKES_Music(name, genre, rating) VALUES ('Oskar', 'Hip-Hop', 42), ('Tina', 'Pop', 3)
+						true |INSERT INTO Benutzer_MAG_Musik(name, genre, rating) VALUES ('Oskar', 'Hip-Hop', 42), ('Tina', 'Pop', 3)
+						true |INSERT INTO Gebruiker_HOUDT_VAN_Musk(name, genre, rating) VALUES ('Oskar', 'Hip-Hop', 42), ('Tina', 'Pop', 3)
+						""")
+		void propertiesOnRelMustStillWork(boolean inlined, String query) throws SQLException {
+			try (var connection = getConnection(true, true)) {
+				try (var statement = connection.prepareStatement(query)) {
+					if (!inlined) {
+						statement.setString(1, "Oskar");
+						statement.setString(2, "Hip-Hop");
+						statement.setInt(3, 42);
+					}
+					statement.executeUpdate();
+				}
+
+				assertRelationship(connection, 42L);
+			}
+		}
+
+		void assertRelationship(Connection connection, Long rating) throws SQLException {
+			try (var statement = connection.createStatement()) {
+				var rs = statement.executeQuery(
+						"/*+ NEO4J FORCE_CYPHER */ MATCH ({name: 'Oskar'})-[r]->({genre: 'Hip-Hop'}) RETURN *");
+				assertThat(rs.next()).isTrue();
+				var rel = rs.getObject("r", Relationship.class);
+				if (rating == null) {
+					assertThat(rel.asMap()).isEmpty();
+				}
+				else {
+					assertThat(rel.asMap()).containsEntry("rating", rating);
+				}
+				assertThat(rs.next()).isFalse();
+
+			}
+		}
+
 	}
 
 }
